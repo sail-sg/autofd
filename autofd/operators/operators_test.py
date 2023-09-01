@@ -507,5 +507,6 @@ class _TestOperatorOverload(absltest.TestCase):
     np.testing.assert_array_equal((g / f)(*args), jnp.ones_like(f(*args)))
     np.testing.assert_array_equal((f / g)(*args), jnp.ones_like(f(*args)))
 
+
 if __name__ == "__main__":
   absltest.main()
