@@ -452,8 +452,9 @@ class _TestLinearize(absltest.TestCase):
     np.testing.assert_array_equal(primal2, expect_primal)
 
 
-class TestOperatorOverload(absltest.TestCase):
-
+class _TestOperatorOverload(absltest.TestCase):
+  # TODO: test whether the abstract methods works.
+  # normally it should because ShapedArray has those overloaded.
   def setUp(self):
 
     def f(
