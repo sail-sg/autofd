@@ -14,3 +14,5 @@
 # limitations under the License.
 
 from . import general_array  # noqa
+
+__version__ = "0.0.1"  # noqa
