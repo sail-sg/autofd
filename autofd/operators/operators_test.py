@@ -38,6 +38,7 @@ from autofd.operators.operators import (
   pack_args,
   unpack_args,
   linearize,
+  function,
 )
 
 # Test the concat operator
@@ -450,6 +451,60 @@ class _TestLinearize(absltest.TestCase):
     np.testing.assert_array_equal(primal1, expect_primal)
     np.testing.assert_array_equal(primal2, expect_primal)
 
+
+class TestOperatorOverload(absltest.TestCase):
+
+  def setUp(self):
+
+    def f(
+      a: Float32[Array, "3 5"],
+      b: Float32[Array, "3 5"],
+    ) -> Float32[Array, "3 5"]:
+      return a**2 + jnp.sin(b)
+
+    self.f = f
+
+  def test_add(self):
+    f = function(self.f)
+    f2 = f + f
+    args = random_input(jax.random.PRNGKey(0), f2)
+    np.testing.assert_array_equal(f2(*args), 2 * f(*args))
+
+  def test_sub(self):
+    f = self.f
+    g = function(f)
+    f2 = g + g
+    f2subf = f2 - f
+    fsubf2 = f - f2
+    args = random_input(jax.random.PRNGKey(0), f2subf)
+    np.testing.assert_array_equal(f2subf(*args), f(*args))
+    np.testing.assert_array_equal(fsubf2(*args), -f(*args))
+
+  def test_neg(self):
+    f = self.f
+    g = function(f)
+    args = random_input(jax.random.PRNGKey(0), g)
+    np.testing.assert_array_equal((-g)(*args), -g(*args))
+
+  def test_pow(self):
+    f = self.f
+    g = function(f)
+    args = random_input(jax.random.PRNGKey(0), g)
+    np.testing.assert_array_equal((g**3)(*args), g(*args)**3)
+
+  def test_mul(self):
+    f = self.f
+    g = function(f)
+    args = random_input(jax.random.PRNGKey(0), g)
+    np.testing.assert_array_equal((g * f)(*args), f(*args)**2)
+    np.testing.assert_array_equal((f * g)(*args), f(*args)**2)
+
+  def test_div(self):
+    f = self.f
+    g = function(f)
+    args = random_input(jax.random.PRNGKey(0), g)
+    np.testing.assert_array_equal((g / f)(*args), jnp.ones_like(f(*args)))
+    np.testing.assert_array_equal((f / g)(*args), jnp.ones_like(f(*args)))
 
 if __name__ == "__main__":
   absltest.main()

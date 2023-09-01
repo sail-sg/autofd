@@ -15,11 +15,13 @@
 
 import types
 import inspect
+import numpy as np
 from typing import Tuple
 from makefun import with_signature
-from functools import partial
+from functools import partial, update_wrapper
 
 import jax
+import jax.numpy as jnp
 from jax.tree_util import (
   tree_map,
   tree_flatten,
@@ -27,6 +29,7 @@ from jax.tree_util import (
 import jax.interpreters.ad as ad
 import jax._src.ad_util as ad_util
 import jax._src.core as core
+from jax._src import custom_api_util
 
 from autofd.general_array import (
   Ret,
@@ -40,6 +43,7 @@ from autofd.general_array import (
   jacobian_spec,
   dummy_array,
   return_annotation,
+  function_to_aval,
 )
 
 
@@ -80,6 +84,101 @@ def _normalize_argnums(f, argnums):
     elif any(map(lambda x: x >= num_args_f, argnums)):
       raise ValueError("argnums must be less than the number of arguments.")
   return argnums
+
+
+@custom_api_util.register_custom_decorator_type
+class function:
+  """Wrapper for a function, to add some operator overloading.
+  TODO: allow other to be scalar
+  """
+
+  def __init__(self, f):
+    update_wrapper(self, f)
+    self.f = f
+    self.ret_ann = return_annotation(self.f)
+
+  def __call__(self, *args):
+    return self.f(*args)
+
+  def __radd__(self, other):
+    return self.__add__(other)
+
+  def __add__(self, other):
+    _assert_same_input_signature(self.f, other)
+    _assert_same_output_signature(self.f, other)
+
+    def add(x: self.ret_ann, y: self.ret_ann) -> self.ret_ann:
+      return tree_map(jnp.add, x, y)
+
+    return compose(add, self.f, other, share_inputs=True)
+
+  def __neg__(self):
+
+    def neg(x: self.ret_ann) -> self.ret_ann:
+      return tree_map(jnp.negative, x)
+
+    return compose(neg, self.f)
+
+  def __rsub__(self, other):
+    _assert_same_input_signature(self.f, other)
+    _assert_same_output_signature(self.f, other)
+
+    def sub(x: self.ret_ann, y: self.ret_ann) -> self.ret_ann:
+      return tree_map(jnp.subtract, x, y)
+
+    return compose(sub, other, self.f, share_inputs=True)
+
+  def __sub__(self, other):
+    _assert_same_input_signature(self.f, other)
+    _assert_same_output_signature(self.f, other)
+
+    def sub(x: self.ret_ann, y: self.ret_ann) -> self.ret_ann:
+      return tree_map(jnp.subtract, x, y)
+
+    return compose(sub, self.f, other, share_inputs=True)
+
+  def __rmul__(self, other):
+    return self.__mul__(other)
+
+  def __mul__(self, other):
+    _assert_same_input_signature(self.f, other)
+    _assert_same_output_signature(self.f, other)
+
+    def mul(x: self.ret_ann, y: self.ret_ann) -> self.ret_ann:
+      return tree_map(jnp.multiply, x, y)
+
+    return compose(mul, self.f, other, share_inputs=True)
+
+  def __rtruediv__(self, other):
+    _assert_same_input_signature(self.f, other)
+    _assert_same_output_signature(self.f, other)
+
+    def div(x: self.ret_ann, y: self.ret_ann) -> self.ret_ann:
+      return tree_map(jnp.divide, x, y)
+
+    return compose(div, other, self.f, share_inputs=True)
+
+  def __truediv__(self, other):
+    _assert_same_input_signature(self.f, other)
+    _assert_same_output_signature(self.f, other)
+
+    def div(x: self.ret_ann, y: self.ret_ann) -> self.ret_ann:
+      return tree_map(jnp.divide, x, y)
+
+    return compose(div, self.f, other, share_inputs=True)
+
+  def __pow__(self, exponent):
+
+    def _pow(x: self.ret_ann) -> self.ret_ann:
+      return tree_map(lambda x: jnp.power(x, exponent), x)
+
+    return compose(_pow, self.f)
+
+
+jax.core.pytype_aval_mappings[function] = function_to_aval
+jax.interpreters.xla.pytype_aval_mappings[function] = function_to_aval
+jax._src.api_util._shaped_abstractify_handlers[function] = function_to_aval
+jax._src.dtypes.python_scalar_dtypes[function] = np.dtype("float32")
 
 
 def concat(*fs):
@@ -138,12 +237,14 @@ def _split_impl(f):
   fns = []
   for i, spec in enumerate(o_spec):
     fns.append(
-      with_signature(
-        inspect.Signature(
-          parameters(f),
-          return_annotation=SpecTree.to_annotation(spec),
-        )
-      )(partial(_split_i, i))
+      function(
+        with_signature(
+          inspect.Signature(
+            parameters(f),
+            return_annotation=SpecTree.to_annotation(spec),
+          )
+        )(partial(_split_i, i))
+      )
     )
   return tuple(fns)
 
@@ -222,6 +323,7 @@ def _linear_transpose_impl(f, *, argnums):
     return_annotation=SpecTree.to_annotation(o_spec_t),
   )
 
+  @function
   @with_signature(sig)
   def _linear_transposed(*args):
     if argnums is None:
@@ -315,6 +417,8 @@ def integrate_p_abstract_eval(f):
 
 def _integrate_transpose_rule(t, f):
 
+  # TODO: this needs to use primitive
+  @function
   @with_signature(signature(f))
   def return_t(*args, **kwargs):
     return t
@@ -346,6 +450,7 @@ def add(*fs):
   """
   fs_o_spec = tuple(SpecTree.from_ret(f) for f in fs)
 
+  @function
   @with_signature(
     inspect.Signature(
       (
@@ -362,7 +467,7 @@ def add(*fs):
 
 
 ad_util.jaxval_adders[types.FunctionType] = add
-
+ad_util.jaxval_adders[function] = add
 # compose function f with gs
 
 
@@ -409,6 +514,7 @@ def _compose_impl(f, *gs, **params):
       ) for i, g_parameters in enumerate(gs_parameters)
     )
 
+  @function
   @with_signature(
     inspect.Signature(
       combined_params, return_annotation=f_sig.return_annotation
@@ -568,6 +674,7 @@ def _nabla_impl(f, *, argnums=0, has_aux=False):
   jac_spec = jacobian_spec(f, argnums, has_aux)
   jacfwd = jax.jacfwd(f, argnums=argnums, has_aux=has_aux)
 
+  @function
   @with_signature(
     inspect.Signature(
       parameters=parameters(f),
@@ -672,6 +779,7 @@ def _linearize_impl(f, *, argnums=None):
   tangents_ann = Tuple[*(in_anns[idx] for idx in argnums)]
   ret_ann = return_annotation(f)
 
+  @function
   def linearized_f(primals: primals_ann, tangents: tangents_ann,
                    /) -> Tuple[ret_ann, ret_ann]:
 
@@ -753,6 +861,7 @@ def _unpack_args_impl(f):
   if len(i_spec) != 1 or not isinstance(i_spec[0], Tuple):
     raise ValueError("f must take a single tuple type argument.")
 
+  @function
   @with_signature(
     inspect.Signature(
       (
@@ -817,6 +926,7 @@ def pack_args(f):
 
 def _pack_args_impl(f):
 
+  @function
   def _packed_f(args: SpecTree.to_annotation(SpecTree.from_args(f)
                                             )) -> return_annotation(f):
     return f(*args)
