@@ -25,6 +25,7 @@ import jax.numpy as jnp
 from jax.tree_util import (
   tree_map,
   tree_flatten,
+  tree_structure,
 )
 import jax.interpreters.ad as ad
 import jax._src.ad_util as ad_util
@@ -97,15 +98,46 @@ class function:
     self.f = f
     self.ret_ann = return_annotation(self.f)
 
+  def _normalize_operand(self, operand):
+    """cast the operand to a function that has the same signature as self.f
+    """
+
+    def _cast_to(value, spec):
+      return jnp.broadcast_to(jnp.asarray(value, spec.dtype), spec.shape)
+
+    ret_spec = SpecTree.from_ret(self.f)
+    if isinstance(operand, (function, types.FunctionType)):
+      _assert_same_input_signature(self.f, operand)
+      _assert_same_output_signature(self.f, operand)
+      return operand
+    elif isinstance(operand, (tuple, list)):
+      if tree_structure(operand) != tree_structure(ret_spec):
+        raise ValueError(
+          f"Cannot cast value with structure {tree_structure(operand)} "
+          f"to a function that return structure {tree_structure(ret_spec)}"
+        )
+      out = tree_map(_cast_to, operand, ret_spec)
+    else:
+      out = tree_map(partial(_cast_to, operand), ret_spec)
+
+    @with_signature(signature(self.f))
+    def _constant(*args):
+      return out
+
+    return _constant
+
   def __call__(self, *args):
+    # TODO: can we use overload call to provide multiple functionality
+    # e.g. f(*args) for evaluating the function
+    # but when other functions are passed f(*gs), it triggers function
+    # composition.
     return self.f(*args)
 
   def __radd__(self, other):
     return self.__add__(other)
 
   def __add__(self, other):
-    _assert_same_input_signature(self.f, other)
-    _assert_same_output_signature(self.f, other)
+    other = self._normalize_operand(other)
 
     def add(x: self.ret_ann, y: self.ret_ann) -> self.ret_ann:
       return tree_map(jnp.add, x, y)
@@ -120,8 +152,7 @@ class function:
     return compose(neg, self.f)
 
   def __rsub__(self, other):
-    _assert_same_input_signature(self.f, other)
-    _assert_same_output_signature(self.f, other)
+    other = self._normalize_operand(other)
 
     def sub(x: self.ret_ann, y: self.ret_ann) -> self.ret_ann:
       return tree_map(jnp.subtract, x, y)
@@ -129,8 +160,7 @@ class function:
     return compose(sub, other, self.f, share_inputs=True)
 
   def __sub__(self, other):
-    _assert_same_input_signature(self.f, other)
-    _assert_same_output_signature(self.f, other)
+    other = self._normalize_operand(other)
 
     def sub(x: self.ret_ann, y: self.ret_ann) -> self.ret_ann:
       return tree_map(jnp.subtract, x, y)
@@ -141,8 +171,7 @@ class function:
     return self.__mul__(other)
 
   def __mul__(self, other):
-    _assert_same_input_signature(self.f, other)
-    _assert_same_output_signature(self.f, other)
+    other = self._normalize_operand(other)
 
     def mul(x: self.ret_ann, y: self.ret_ann) -> self.ret_ann:
       return tree_map(jnp.multiply, x, y)
@@ -150,8 +179,7 @@ class function:
     return compose(mul, self.f, other, share_inputs=True)
 
   def __rtruediv__(self, other):
-    _assert_same_input_signature(self.f, other)
-    _assert_same_output_signature(self.f, other)
+    other = self._normalize_operand(other)
 
     def div(x: self.ret_ann, y: self.ret_ann) -> self.ret_ann:
       return tree_map(jnp.divide, x, y)
@@ -159,8 +187,7 @@ class function:
     return compose(div, other, self.f, share_inputs=True)
 
   def __truediv__(self, other):
-    _assert_same_input_signature(self.f, other)
-    _assert_same_output_signature(self.f, other)
+    other = self._normalize_operand(other)
 
     def div(x: self.ret_ann, y: self.ret_ann) -> self.ret_ann:
       return tree_map(jnp.divide, x, y)
@@ -168,11 +195,12 @@ class function:
     return compose(div, self.f, other, share_inputs=True)
 
   def __pow__(self, exponent):
+    exponent = self._normalize_operand(exponent)
 
-    def _pow(x: self.ret_ann) -> self.ret_ann:
-      return tree_map(lambda x: jnp.power(x, exponent), x)
+    def _pow(x: self.ret_ann, y: self.ret_ann) -> self.ret_ann:
+      return tree_map(lambda x, y: x**y, x, y)
 
-    return compose(_pow, self.f)
+    return compose(_pow, self.f, exponent, share_inputs=True)
 
 
 jax.core.pytype_aval_mappings[function] = function_to_aval

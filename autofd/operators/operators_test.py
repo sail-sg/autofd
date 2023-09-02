@@ -41,6 +41,11 @@ from autofd.operators.operators import (
   function,
 )
 
+
+def _assert_tree_array_equal(a, b):
+  tree_map(lambda x, y: np.testing.assert_array_equal(x, y), a, b)
+
+
 # Test the concat operator
 
 
@@ -452,27 +457,56 @@ class _TestLinearize(absltest.TestCase):
     np.testing.assert_array_equal(primal2, expect_primal)
 
 
+def overload_f1(
+  a: Float32[Array, "3 5"],
+  b: Float32[Array, "3 5"],
+) -> Float32[Array, "3 5"]:
+  return a**2 + jnp.sin(b)
+
+
+def overload_f2(
+  a: Float32[Array, "3 5"],
+  b: Float32[Array, "3 5"],
+) -> Tuple[Float32[Array, "3 5"], Float32[Array, "3 5"]]:
+  return (a**2, jnp.sin(b))
+
+
+def overload_f3(
+  a: Float32[Array, "3 5"],
+  b: Float32[Array, "3 5"],
+) -> Tuple[Float32[Array, "5"], Float32[Array, "5"]]:
+  return ((a**2).sum(0), jnp.sin(b).sum(0))
+
+
+def overload_f4(a, b):
+  return a**2 + jnp.sin(b)
+
+
 class _TestOperatorOverload(absltest.TestCase):
   # TODO: test whether the abstract methods works.
   # normally it should because ShapedArray has those overloaded.
-  def setUp(self):
 
-    def f(
-      a: Float32[Array, "3 5"],
-      b: Float32[Array, "3 5"],
-    ) -> Float32[Array, "3 5"]:
-      return a**2 + jnp.sin(b)
-
-    self.f = f
+  def test_broadcast(self):
+    f = overload_f2
+    g = function(f)
+    args = random_input(jax.random.PRNGKey(0), f)
+    # tree_map
+    fp11 = g + jnp.ones([3, 5])
+    fp12 = g + jnp.ones([5])
+    _assert_tree_array_equal(fp11(*args), tree_map(lambda x: x + 1, f(*args)))
+    _assert_tree_array_equal(fp12(*args), tree_map(lambda x: x + 1, f(*args)))
 
   def test_add(self):
-    f = function(self.f)
-    f2 = f + f
+    f = overload_f1
+    g = function(f)
+    f2 = g + f
     args = random_input(jax.random.PRNGKey(0), f2)
-    np.testing.assert_array_equal(f2(*args), 2 * f(*args))
+    _assert_tree_array_equal(f2(*args), tree_map(lambda x: 2 * x, f(*args)))
+    fp1 = g + 1
+    _assert_tree_array_equal(fp1(*args), tree_map(lambda x: x + 1, f(*args)))
 
   def test_sub(self):
-    f = self.f
+    f = overload_f1
     g = function(f)
     f2 = g + g
     f2subf = f2 - f
@@ -482,26 +516,26 @@ class _TestOperatorOverload(absltest.TestCase):
     np.testing.assert_array_equal(fsubf2(*args), -f(*args))
 
   def test_neg(self):
-    f = self.f
+    f = overload_f1
     g = function(f)
     args = random_input(jax.random.PRNGKey(0), g)
     np.testing.assert_array_equal((-g)(*args), -g(*args))
 
   def test_pow(self):
-    f = self.f
+    f = overload_f1
     g = function(f)
     args = random_input(jax.random.PRNGKey(0), g)
-    np.testing.assert_array_equal((g**3)(*args), g(*args)**3)
+    np.testing.assert_array_almost_equal((g**3)(*args), g(*args)**3)
 
   def test_mul(self):
-    f = self.f
+    f = overload_f1
     g = function(f)
     args = random_input(jax.random.PRNGKey(0), g)
     np.testing.assert_array_equal((g * f)(*args), f(*args)**2)
     np.testing.assert_array_equal((f * g)(*args), f(*args)**2)
 
   def test_div(self):
-    f = self.f
+    f = overload_f1
     g = function(f)
     args = random_input(jax.random.PRNGKey(0), g)
     np.testing.assert_array_equal((g / f)(*args), jnp.ones_like(f(*args)))
