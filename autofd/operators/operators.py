@@ -142,14 +142,14 @@ class function:
     def add(x: self.ret_ann, y: self.ret_ann) -> self.ret_ann:
       return tree_map(jnp.add, x, y)
 
-    return compose(add, self.f, other, share_inputs=True)
+    return compose(add, self.f, other, share_inputs=True, f_type="linear")
 
   def __neg__(self):
 
     def neg(x: self.ret_ann) -> self.ret_ann:
       return tree_map(jnp.negative, x)
 
-    return compose(neg, self.f)
+    return compose(neg, self.f, f_type="linear")
 
   def __rsub__(self, other):
     other = self._normalize_operand(other)
@@ -157,7 +157,7 @@ class function:
     def sub(x: self.ret_ann, y: self.ret_ann) -> self.ret_ann:
       return tree_map(jnp.subtract, x, y)
 
-    return compose(sub, other, self.f, share_inputs=True)
+    return compose(sub, other, self.f, share_inputs=True, f_type="linear")
 
   def __sub__(self, other):
     other = self._normalize_operand(other)
@@ -165,7 +165,7 @@ class function:
     def sub(x: self.ret_ann, y: self.ret_ann) -> self.ret_ann:
       return tree_map(jnp.subtract, x, y)
 
-    return compose(sub, self.f, other, share_inputs=True)
+    return compose(sub, self.f, other, share_inputs=True, f_type="linear")
 
   def __rmul__(self, other):
     return self.__mul__(other)
