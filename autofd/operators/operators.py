@@ -593,7 +593,7 @@ def _compose_jvp_rule(primals, tangents, **params):
     # linearize f
     tangents_out.append(
       compose(
-        split(linearize(f))[1],
+        linearize(f),
         zip_functions(*gs, share_inputs=share_inputs),
         zip_functions(*gs_dot, share_inputs=share_inputs),
         share_inputs=True,
@@ -654,7 +654,7 @@ def _compose_transpose_rule(cotangent, f, *gs, **params):
       primal, tangent = gs
       if ad.is_undefined_primal(primal):
         raise RuntimeError(
-          "transpose of compose(f, g1, g2) wrt g1 is not defined. "
+          "transpose of compose(linearized_f, g1, g2) wrt g1 is not defined. "
           "Because it may not be a linear function."
         )
       elif ad.is_undefined_primal(tangent):
@@ -808,8 +808,7 @@ def _linearize_impl(f, *, argnums=None):
   ret_ann = return_annotation(f)
 
   @function
-  def linearized_f(primals: primals_ann, tangents: tangents_ann,
-                   /) -> Tuple[ret_ann, ret_ann]:
+  def linearized_f(primals: primals_ann, tangents: tangents_ann, /) -> ret_ann:
 
     def partial_f(*args):
       _primals = [p for p in primals]
@@ -818,7 +817,7 @@ def _linearize_impl(f, *, argnums=None):
       return f(*_primals)
 
     primal_args = tuple(primals[idx] for idx in argnums)
-    return jax.jvp(partial_f, primal_args, tangents)
+    return jax.jvp(partial_f, primal_args, tangents)[1]
 
   return linearized_f
 
@@ -834,7 +833,7 @@ def linearize_p_abstract_eval(f, *, argnums=None):
   ret_spec = f.shape[0].spec
   return GeneralArray(
     (
-      Ret((ret_spec, ret_spec)),
+      Ret(ret_spec),
       Arg(primals_spec, name="primals"),
       Arg(tangents_spec, name="tangents"),
     )

@@ -442,19 +442,15 @@ class _TestLinearize(absltest.TestCase):
       jax.random.normal(jax.random.PRNGKey(2), (3, 5)),
       jax.random.normal(jax.random.PRNGKey(3), (3, 5)),
     )
-    expect_primal = f(x, y)
-    primal0, out0 = linearize(f, argnums=(0,))((x, y), (x_dot,))
+    out0 = linearize(f, argnums=(0,))((x, y), (x_dot,))
     expect0 = 2 * x * x_dot
-    primal1, out1 = linearize(f, argnums=(1,))((x, y), (y_dot,))
+    out1 = linearize(f, argnums=(1,))((x, y), (y_dot,))
     expect1 = jnp.cos(y) * y_dot
-    primal2, out2 = linearize(f)((x, y), (x_dot, y_dot))
+    out2 = linearize(f)((x, y), (x_dot, y_dot))
     expect2 = 2 * x * x_dot + jnp.cos(y) * y_dot
     np.testing.assert_array_equal(out0, expect0)
     np.testing.assert_array_equal(out1, expect1)
     np.testing.assert_array_equal(out2, expect2)
-    np.testing.assert_array_equal(primal0, expect_primal)
-    np.testing.assert_array_equal(primal1, expect_primal)
-    np.testing.assert_array_equal(primal2, expect_primal)
 
 
 def overload_f1(
