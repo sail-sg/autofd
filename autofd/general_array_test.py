@@ -18,7 +18,6 @@ import jax.numpy as jnp
 from jaxtyping import Float32, Array
 from typing import Tuple
 from absl.testing import absltest, parameterized
-from absl import logging
 from autofd.general_array import (
   Arg,
   Ret,

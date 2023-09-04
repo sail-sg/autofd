@@ -285,6 +285,7 @@ def integrate_p_abstract_eval(f):
 def _integrate_transpose_rule(t, f):
   assert ad.is_undefined_primal(f)
   # TODO: this needs to use primitive
+
   @with_spec(f.aval.arg_spec, f.aval.ret_spec)
   def return_t(*args, **kwargs):
     return t
