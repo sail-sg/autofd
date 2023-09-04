@@ -23,27 +23,31 @@ from autofd.general_array import (
   Arg,
   Ret,
   Spec,
-  general_shape,
+  function,
   jacobian_spec,
   SpecTree,
   dummy_input,
 )
 
 
+@function
 def function0(x: Float32[Array, "3 5"]) -> Float32[Array, ""]:
   return x.sum()
 
 
+@function
 def function1(x: Float32[Array, "3 5"]) -> Float32[Array, "3"]:
   return x.sum(1)
 
 
+@function
 def function2(
   x: Float32[Array, "3 5"]
 ) -> Tuple[Float32[Array, "3"], Float32[Array, "5"]]:
   return x.sum(1), x.sum(0)
 
 
+@function
 def function3(
   x: Float32[Array, "3 5"],
   y: Float32[Array, "3 5"],
@@ -51,6 +55,7 @@ def function3(
   return x.sum(1), y.sum(0)
 
 
+@function
 def function4(
   x: Float32[Array, "3 5"],
   y: Float32[Array, "3 5"],
@@ -61,22 +66,16 @@ def function4(
 class _TestGeneralArray(parameterized.TestCase):
 
   def test_spec(self):
-    f_shape = general_shape(function0)
-    logging.info(f_shape)
     self.assertEqual(
-      f_shape,
+      function0.shape,
       (Ret(Spec((), jnp.float32)), Arg(Spec((3, 5), jnp.float32), name="x"))
     )
-    f_shape = general_shape(function1)
-    logging.info(f_shape)
     self.assertEqual(
-      f_shape,
+      function1.shape,
       (Ret(Spec((3,), jnp.float32)), Arg(Spec((3, 5), jnp.float32), name="x"))
     )
-    f_shape = general_shape(function2)
-    logging.info(f_shape)
     self.assertEqual(
-      f_shape, (
+      function2.shape, (
         Ret((Spec((3,), jnp.float32), Spec((5,), jnp.float32))
            ), Arg(Spec((3, 5), jnp.float32), name="x")
       )

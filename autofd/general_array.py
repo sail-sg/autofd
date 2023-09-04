@@ -17,6 +17,7 @@ import jax.numpy as jnp
 import jaxtyping
 from jaxtyping import Array
 from typing import Tuple
+from functools import update_wrapper
 from jax.tree_util import tree_flatten, tree_map, tree_unflatten
 import inspect
 import types
@@ -24,7 +25,6 @@ import numpy as np
 
 # this is to trick jax to return dtype=float32 for functions
 # TODO: generalize dtype for general arrays (aka functions).
-jax._src.dtypes.python_scalar_dtypes[types.FunctionType] = np.dtype("float32")
 MetaAbstractArray = jaxtyping._array_types._MetaAbstractArray  # noqa
 
 dtype_to_jaxtyping = {
@@ -45,40 +45,6 @@ dtype_to_jaxtyping = {
   "bool": jaxtyping.Bool,
   "bool_": jaxtyping.Bool,
 }
-
-
-class GeneralArray(jax.core.ShapedArray):
-
-  def __init__(
-    self, shape, dtype=jnp.float32, weak_type=True, named_shape=None
-  ):
-    # TODO: currently setting dtype to types.FunctionType will cause
-    # weird error.
-    super().__init__(
-      shape, dtype=dtype, weak_type=weak_type, named_shape=named_shape
-    )
-
-  def update(self, shape=None, dtype=None, weak_type=None, named_shape=None):
-    sa = super().update(shape, dtype, weak_type, named_shape)
-    return GeneralArray(sa.shape, sa.dtype, sa.weak_type, sa.named_shape)
-
-  def at_least_vspace(self):
-    sa = super().at_least_vspace()
-    return GeneralArray(sa.shape, sa.dtype, sa.weak_type, sa.named_shape)
-
-  def str_short(self, short_dtypes=True):
-    ret = self.shape[0]
-    args = self.shape[1:]
-    return f"{','.join(map(str, args))}->{ret}".replace(" ", "")
-
-
-jax.core.raise_to_shaped_mappings[GeneralArray
-                                 ] = lambda aval, weak_type: GeneralArray(
-                                   aval.shape,
-                                   dtype=aval.dtype,
-                                   weak_type=weak_type,
-                                   named_shape=aval.named_shape,
-                                 )
 
 
 class Spec:
@@ -171,6 +137,168 @@ class SpecTree:
     )
 
 
+class GeneralArray(jax.core.ShapedArray):
+
+  def __init__(
+    self, shape, dtype=jnp.float32, weak_type=True, named_shape=None
+  ):
+    # TODO: currently setting dtype to types.FunctionType will cause
+    # weird error.
+    super().__init__(
+      shape, dtype=dtype, weak_type=weak_type, named_shape=named_shape
+    )
+
+  def update(self, shape=None, dtype=None, weak_type=None, named_shape=None):
+    sa = super().update(shape, dtype, weak_type, named_shape)
+    return GeneralArray(sa.shape, sa.dtype, sa.weak_type, sa.named_shape)
+
+  def at_least_vspace(self):
+    sa = super().at_least_vspace()
+    return GeneralArray(sa.shape, sa.dtype, sa.weak_type, sa.named_shape)
+
+  def str_short(self, short_dtypes=True):
+    ret = self.shape[0]
+    args = self.shape[1:]
+    return f"{','.join(map(str, args))}->{ret}".replace(" ", "")
+
+  @property
+  def num_args(self):
+    return len(self.shape) - 1
+
+  @property
+  def arg_spec(self):
+    return tuple(d.spec for d in self.shape[1:])
+
+  @property
+  def ret_spec(self):
+    return self.shape[0].spec
+
+
+jax.core.raise_to_shaped_mappings[GeneralArray
+                                 ] = lambda aval, weak_type: GeneralArray(
+                                   aval.shape,
+                                   dtype=aval.dtype,
+                                   weak_type=weak_type,
+                                   named_shape=aval.named_shape,
+                                 )
+
+
+class function:
+  """Wrapper for a function, to add some operator overloading.
+  """
+
+  def __init__(self, f, arg_spec=None, ret_spec=None):
+    update_wrapper(self, f)
+    self.f = f
+    if arg_spec and not isinstance(arg_spec, (tuple, list)):
+      raise ValueError(
+        "arg_spec must be of Tuple[Pytree[Spec]], "
+        f"got {arg_spec} of type {type(arg_spec)}"
+      )
+    if ret_spec and not isinstance(ret_spec, (tuple, list, Spec)):
+      raise ValueError(
+        "ret_spec must be a Union[Spec, Pytree[Spec]], "
+        f"got {ret_spec} of type {type(ret_spec)}"
+      )
+    self.arg_spec = arg_spec or SpecTree.from_args(self.f)
+    self.ret_spec = ret_spec or SpecTree.from_ret(self.f)
+
+  @property
+  def shape(self):
+    return (
+      Ret(self.ret_spec),
+      *(Arg(s, f"arg{i}") for i, s in enumerate(self.arg_spec))
+    )
+
+  @property
+  def num_args(self):
+    return len(self.arg_spec)
+
+  def __call__(self, *args):
+    # TODO: can we use overload call to provide multiple functionality
+    # e.g. f(*args) for evaluating the function
+    # but when other functions are passed f(*gs), it triggers function
+    # composition.
+    return self.f(*args)
+
+  def __radd__(self, other):
+    return self.__add__(other)
+
+  def __add__(self, other):
+    other = self._normalize_operand(other)
+
+    def add(x: self.ret_ann, y: return_annotation(other)) -> self.ret_ann:
+      return tree_map(jnp.add, x, y)
+
+    return compose(add, self.f, other, share_inputs=True, f_type="linear")
+
+  def __neg__(self):
+
+    def neg(x: self.ret_ann) -> self.ret_ann:
+      return tree_map(jnp.negative, x)
+
+    return compose(neg, self.f, f_type="linear")
+
+  def __rsub__(self, other):
+    other = self._normalize_operand(other)
+
+    def sub(x: self.ret_ann, y: return_annotation(other)) -> self.ret_ann:
+      return tree_map(jnp.subtract, x, y)
+
+    return compose(sub, other, self.f, share_inputs=True, f_type="linear")
+
+  def __sub__(self, other):
+    other = self._normalize_operand(other)
+
+    def sub(x: self.ret_ann, y: return_annotation(other)) -> self.ret_ann:
+      return tree_map(jnp.subtract, x, y)
+
+    return compose(sub, self.f, other, share_inputs=True, f_type="linear")
+
+  def __rmul__(self, other):
+    return self.__mul__(other)
+
+  def __mul__(self, other):
+    other = self._normalize_operand(other)
+
+    def mul(x: self.ret_ann, y: return_annotation(other)) -> self.ret_ann:
+      return tree_map(jnp.multiply, x, y)
+
+    return compose(mul, self.f, other, share_inputs=True)
+
+  def __rtruediv__(self, other):
+    other = self._normalize_operand(other)
+
+    def div(x: self.ret_ann, y: return_annotation(other)) -> self.ret_ann:
+      return tree_map(jnp.divide, x, y)
+
+    return compose(div, other, self.f, share_inputs=True)
+
+  def __truediv__(self, other):
+    other = self._normalize_operand(other)
+
+    def div(x: self.ret_ann, y: return_annotation(other)) -> self.ret_ann:
+      return tree_map(jnp.divide, x, y)
+
+    return compose(div, self.f, other, share_inputs=True)
+
+  def __pow__(self, exponent):
+    exponent = self._normalize_operand(exponent)
+
+    def _pow(x: self.ret_ann, y: return_annotation(exponent)) -> self.ret_ann:
+      return tree_map(lambda x, y: x**y, x, y)
+
+    return compose(_pow, self.f, exponent, share_inputs=True)
+
+
+def with_spec(arg_spec=None, ret_spec=None):
+
+  def decorator(f):
+    return function(f, arg_spec=arg_spec, ret_spec=ret_spec)
+
+  return decorator
+
+
 # Extend the original dimension system with GeneralDim,
 # to denote the inputs/output of functions.
 class GeneralDim:
@@ -232,25 +360,12 @@ def _normalize_dim(dim):
 # Convert a function to its abstract value.
 def function_to_aval(f):
   """Convert a function to its abstract value."""
-  try:
-    shape = general_shape(f)
-  except ValueError:
-    raise RuntimeError(
-      "The autofd machinary doesn't apply to functions "
-      "that are not fully annotated."
+  if isinstance(f, types.FunctionType):
+    raise ValueError(
+      f"Please decorate the function {f} with @function or @with_spec."
     )
-  return GeneralArray(shape)
-
-
-def general_shape(f):
-  return (
-    Ret(SpecTree.from_ret(f)),
-    *(Arg(s, f"arg{i}") for i, s in enumerate(SpecTree.from_args(f)))
-  )
-
-
-def num_args(f):
-  return len(SpecTree.from_args(f))
+  elif isinstance(f, function):
+    return GeneralArray(f.shape)
 
 
 def parameters(f):
@@ -293,13 +408,12 @@ def signature(f):
 
 
 def dummy_input(f):
-  return dummy_array(SpecTree.from_args(f))
+  return dummy_array(f.arg_spec)
 
 
 def random_input(key, f):
-  spec = SpecTree.from_args(f)
   return tree_map(
-    lambda s: jax.random.normal(key, s.shape, dtype=s.dtype), spec
+    lambda s: jax.random.normal(key, s.shape, dtype=s.dtype), f.arg_spec
   )
 
 
@@ -311,8 +425,8 @@ def dummy_array(spec_tree):
 
 
 def jacobian_spec(f, argnums=0, has_aux=False):
-  i_spec = SpecTree.from_args(f)
-  o_spec = SpecTree.from_ret(f)
+  i_spec = f.arg_spec
+  o_spec = f.ret_spec
   if has_aux:
     if not isinstance(o_spec, tuple) or len(o_spec) != 2:
       raise ValueError("has_aux=True requires f to have 2 outputs.")
@@ -345,3 +459,10 @@ jax.core.pytype_aval_mappings[types.FunctionType] = function_to_aval
 jax.interpreters.xla.pytype_aval_mappings[types.FunctionType] = function_to_aval
 jax._src.api_util._shaped_abstractify_handlers[types.FunctionType
                                               ] = function_to_aval
+jax._src.dtypes.python_scalar_dtypes[types.FunctionType] = np.dtype("float32")
+
+# register function class
+jax.core.pytype_aval_mappings[function] = function_to_aval
+jax.interpreters.xla.pytype_aval_mappings[function] = function_to_aval
+jax._src.api_util._shaped_abstractify_handlers[function] = function_to_aval
+jax._src.dtypes.python_scalar_dtypes[function] = np.dtype("float32")

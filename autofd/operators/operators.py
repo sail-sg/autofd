@@ -14,11 +14,8 @@
 """A collection of operators."""
 
 import types
-import inspect
-import numpy as np
 from typing import Tuple
-from makefun import with_signature
-from functools import partial, update_wrapper
+from functools import partial
 
 import jax
 import jax.numpy as jnp
@@ -27,20 +24,17 @@ from jax.tree_util import (
   tree_flatten,
   tree_structure,
 )
-import jax.interpreters.ad as ad
-import jax._src.ad_util as ad_util
-import jax._src.core as core
-from jax._src import custom_api_util
+from jax.interpreters import ad
+from jax._src import ad_util
+from jax import core
 
 from autofd.general_array import (
   Ret,
   Arg,
   SpecTree,
   GeneralArray,
-  general_shape,
-  signature,
-  parameters,
-  num_args,
+  function,
+  with_spec,
   jacobian_spec,
   dummy_array,
   return_annotation,
@@ -49,165 +43,41 @@ from autofd.general_array import (
 
 
 def _assert_same_input_signature(*fs):
-  arg_specs = tuple(SpecTree.from_args(f) for f in fs)
+  arg_specs = tuple(f.arg_spec for f in fs)
   for d in arg_specs[1:]:
     if d != arg_specs[0]:
       raise ValueError("All functions must have the same input signature.")
 
 
 def _assert_same_output_signature(*fs):
-  arg_specs = tuple(SpecTree.from_ret(f) for f in fs)
+  arg_specs = tuple(f.ret_spec for f in fs)
   for d in arg_specs[1:]:
     if d != arg_specs[0]:
       raise ValueError("All functions must have the same output signature.")
 
 
 def _assert_composable(f, *gs):
-  f_i_spec = SpecTree.from_args(f)
-  gs_o_spec = tuple(SpecTree.from_ret(g) for g in gs)
+  f_i_spec = f.arg_spec
+  gs_o_spec = tuple(g.ret_spec for g in gs)
   if f_i_spec != gs_o_spec:
     raise ValueError(
       f"Cannot compose functions with incompatible shapes: "
-      f"f has shape: {general_shape(f)}, "
-      f"while g are {tuple(general_shape(g) for g in gs)}"
+      f"f requires: {f.arg_spec}, "
+      f"while gs provides {tuple(g.ret_spec for g in gs)}"
     )
 
 
 def _normalize_argnums(f, argnums):
-  num_args_f = num_args(f)
   if argnums is None:
-    argnums = tuple(range(num_args_f))
+    argnums = tuple(range(f.num_args))
   elif isinstance(argnums, int):
     argnums = (argnums,)
   if isinstance(argnums, tuple):
     if len(set(argnums)) < len(argnums):
       raise ValueError("argnums must be unique.")
-    elif any(map(lambda x: x >= num_args_f, argnums)):
+    elif any(map(lambda x: x >= f.num_args, argnums)):
       raise ValueError("argnums must be less than the number of arguments.")
   return argnums
-
-
-@custom_api_util.register_custom_decorator_type
-class function:
-  """Wrapper for a function, to add some operator overloading.
-  TODO: allow other to be scalar
-  """
-
-  def __init__(self, f):
-    update_wrapper(self, f)
-    self.f = f
-    self.ret_ann = return_annotation(self.f)
-
-  def _normalize_operand(self, operand):
-    """cast the operand to a function that has the same signature as self.f
-    """
-    ret_spec = SpecTree.from_ret(self.f)
-    if isinstance(operand, (function, types.FunctionType)):
-      _assert_same_input_signature(self.f, operand)
-      _assert_same_output_signature(self.f, operand)
-      return operand
-    elif isinstance(operand, (tuple, list)):
-      if tree_structure(operand) != tree_structure(ret_spec):
-        raise ValueError(
-          f"Cannot cast value with structure {tree_structure(operand)} "
-          f"to a function that return structure {tree_structure(ret_spec)}"
-        )
-      out = operand
-    else:
-      out = tree_map(lambda x: jnp.array(operand), ret_spec)
-
-    @with_signature(
-      inspect.Signature(
-        parameters(self.f),
-        return_annotation=SpecTree.to_annotation(SpecTree.from_value(out))
-      )
-    )
-    def _constant(*args):
-      return out
-
-    return _constant
-
-  def __call__(self, *args):
-    # TODO: can we use overload call to provide multiple functionality
-    # e.g. f(*args) for evaluating the function
-    # but when other functions are passed f(*gs), it triggers function
-    # composition.
-    return self.f(*args)
-
-  def __radd__(self, other):
-    return self.__add__(other)
-
-  def __add__(self, other):
-    other = self._normalize_operand(other)
-
-    def add(x: self.ret_ann, y: return_annotation(other)) -> self.ret_ann:
-      return tree_map(jnp.add, x, y)
-
-    return compose(add, self.f, other, share_inputs=True, f_type="linear")
-
-  def __neg__(self):
-
-    def neg(x: self.ret_ann) -> self.ret_ann:
-      return tree_map(jnp.negative, x)
-
-    return compose(neg, self.f, f_type="linear")
-
-  def __rsub__(self, other):
-    other = self._normalize_operand(other)
-
-    def sub(x: self.ret_ann, y: return_annotation(other)) -> self.ret_ann:
-      return tree_map(jnp.subtract, x, y)
-
-    return compose(sub, other, self.f, share_inputs=True, f_type="linear")
-
-  def __sub__(self, other):
-    other = self._normalize_operand(other)
-
-    def sub(x: self.ret_ann, y: return_annotation(other)) -> self.ret_ann:
-      return tree_map(jnp.subtract, x, y)
-
-    return compose(sub, self.f, other, share_inputs=True, f_type="linear")
-
-  def __rmul__(self, other):
-    return self.__mul__(other)
-
-  def __mul__(self, other):
-    other = self._normalize_operand(other)
-
-    def mul(x: self.ret_ann, y: return_annotation(other)) -> self.ret_ann:
-      return tree_map(jnp.multiply, x, y)
-
-    return compose(mul, self.f, other, share_inputs=True)
-
-  def __rtruediv__(self, other):
-    other = self._normalize_operand(other)
-
-    def div(x: self.ret_ann, y: return_annotation(other)) -> self.ret_ann:
-      return tree_map(jnp.divide, x, y)
-
-    return compose(div, other, self.f, share_inputs=True)
-
-  def __truediv__(self, other):
-    other = self._normalize_operand(other)
-
-    def div(x: self.ret_ann, y: return_annotation(other)) -> self.ret_ann:
-      return tree_map(jnp.divide, x, y)
-
-    return compose(div, self.f, other, share_inputs=True)
-
-  def __pow__(self, exponent):
-    exponent = self._normalize_operand(exponent)
-
-    def _pow(x: self.ret_ann, y: return_annotation(exponent)) -> self.ret_ann:
-      return tree_map(lambda x, y: x**y, x, y)
-
-    return compose(_pow, self.f, exponent, share_inputs=True)
-
-
-jax.core.pytype_aval_mappings[function] = function_to_aval
-jax.interpreters.xla.pytype_aval_mappings[function] = function_to_aval
-jax._src.api_util._shaped_abstractify_handlers[function] = function_to_aval
-jax._src.dtypes.python_scalar_dtypes[function] = np.dtype("float32")
 
 
 def concat(*fs):
@@ -229,17 +99,9 @@ def concat(*fs):
   Returns:
     A function that returns a tuple of the outputs of the functions.
   """
-  fs_o_spec = tuple(SpecTree.from_ret(f) for f in fs)
+  fs_o_spec = tuple(f.ret_spec for f in fs)
 
-  @with_signature(
-    inspect.Signature(
-      (
-        SpecTree.to_parameter(SpecTree.from_ret(f), name=f"arg{i}")
-        for i, f in enumerate(fs)
-      ),
-      return_annotation=SpecTree.to_annotation(fs_o_spec),
-    )
-  )
+  @with_spec(arg_spec=fs_o_spec, ret_spec=fs_o_spec)
   def _concat_args(*args):
     return args
 
@@ -256,25 +118,15 @@ def split(f):
 
 
 def _split_impl(f):
-  o_spec = SpecTree.from_ret(f)
-  if not isinstance(o_spec, tuple):
+  if not isinstance(f.ret_spec, tuple):
     raise ValueError("Function must return a tuple.")
 
   def _split_i(i, *args, **kwargs):
     return f(*args, **kwargs)[i]
 
   fns = []
-  for i, spec in enumerate(o_spec):
-    fns.append(
-      function(
-        with_signature(
-          inspect.Signature(
-            parameters(f),
-            return_annotation=SpecTree.to_annotation(spec),
-          )
-        )(partial(_split_i, i))
-      )
-    )
+  for i, spec in enumerate(f.ret_spec):
+    fns.append(function(partial(_split_i, i), f.arg_spec, spec))
   return tuple(fns)
 
 
@@ -285,7 +137,7 @@ split_p.multiple_results = True
 
 @split_p.def_abstract_eval
 def split_p_abstract_eval(f):
-  ret_spec = SpecTree.from_ret(f)
+  ret_spec = f.ret_spec
   if not isinstance(ret_spec, tuple):
     raise ValueError("function must return a tuple.")
   return tuple(GeneralArray((Ret(s), *f.shape[1:])) for s in ret_spec)
@@ -300,16 +152,9 @@ jax.interpreters.ad.primitive_transposes[split_p] = _split_transpose_rule
 
 
 def zip_functions(*fs, share_inputs=False):
-  zip_params = tuple(
-    inspect.Parameter(
-      name=f"x{i}",
-      kind=inspect.Parameter.POSITIONAL_ONLY,
-      annotation=return_annotation(f)
-    ) for i, f in enumerate(fs)
-  )
-  zip_returns = Tuple[*(p.annotation for p in zip_params)]
+  arg_spec = tuple(f.ret_spec for f in fs)
 
-  @with_signature(inspect.Signature(zip_params, return_annotation=zip_returns))
+  @with_spec(arg_spec, arg_spec)
   def _zipped(*args, **kwargs):
     return args
 
@@ -331,8 +176,8 @@ def linear_transpose(f, *, argnums=None):
 
 
 def _linear_transpose_impl(f, *, argnums):
-  i_spec = SpecTree.from_args(f)
-  o_spec = SpecTree.from_ret(f)
+  i_spec = f.arg_spec
+  o_spec = f.ret_spec
 
   if argnums is None:
     i_spec_t = (o_spec,)
@@ -345,15 +190,7 @@ def _linear_transpose_impl(f, *, argnums):
     param_names = list(f"arg{i}" for i in range(len(i_spec_t)))
     param_names[argnums] = "cotangent"
 
-  sig = inspect.Signature(
-    tuple(
-      SpecTree.to_parameter(s, name=n) for s, n in zip(i_spec_t, param_names)
-    ),
-    return_annotation=SpecTree.to_annotation(o_spec_t),
-  )
-
-  @function
-  @with_signature(sig)
+  @with_spec(arg_spec=tuple(i_spec_t), ret_spec=o_spec_t)
   def _linear_transposed(*args):
     if argnums is None:
       return jax.linear_transpose(f, *dummy_array(i_spec))(*args)
@@ -377,8 +214,8 @@ linear_transpose_p.def_impl(_linear_transpose_impl)
 
 @linear_transpose_p.def_abstract_eval
 def linear_transpose_p_abstract_eval(f, *, argnums):
-  i_spec = SpecTree.from_args(f)
-  o_spec = SpecTree.from_ret(f)
+  i_spec = f.arg_spec
+  o_spec = f.ret_spec
 
   if argnums is None:
     i_spec_t = (o_spec,)
@@ -397,11 +234,12 @@ def linear_transpose_p_abstract_eval(f, *, argnums):
 
 
 def _linear_transpose_transpose_rule(t, f, *, argnums):
+  assert ad.is_undefined_primal(f)
   if argnums is None:
     tt = split(unpack_args(linear_transpose(t, argnums=argnums)))[0]
   else:
     tt = linear_transpose(t, argnums=argnums)
-  if general_shape(f) != general_shape(tt):
+  if f.aval.shape != tt.shape:
     raise RuntimeError("Internal error")
   return (tt,)
 
@@ -428,7 +266,7 @@ def integrate(f):
 
 
 def _integrate_impl(f):
-  return dummy_array(SpecTree.from_ret(f))
+  return dummy_array(f.ret_spec)
 
 
 integrate_p = core.Primitive("integrate")
@@ -437,18 +275,16 @@ integrate_p.def_impl(_integrate_impl)
 
 @integrate_p.def_abstract_eval
 def integrate_p_abstract_eval(f):
-  spec_tree = SpecTree.from_ret(f)
   return tree_map(
     lambda spec: core.ShapedArray(spec.shape, dtype=spec.dtype),
-    spec_tree,
+    f.ret_spec,
   )
 
 
 def _integrate_transpose_rule(t, f):
-
+  assert ad.is_undefined_primal(f)
   # TODO: this needs to use primitive
-  @function
-  @with_signature(signature(f))
+  @with_spec(f.aval.arg_spec, f.aval.ret_spec)
   def return_t(*args, **kwargs):
     return t
 
@@ -477,18 +313,9 @@ def add(*fs):
   Returns:
     A function that sums the outputs of the functions.
   """
-  fs_o_spec = tuple(SpecTree.from_ret(f) for f in fs)
+  fs_o_spec = tuple(f.ret_spec for f in fs)
 
-  @function
-  @with_signature(
-    inspect.Signature(
-      (
-        SpecTree.to_parameter(spec, name=f"arg{i}")
-        for i, spec in enumerate(fs_o_spec)
-      ),
-      return_annotation=SpecTree.to_annotation(fs_o_spec[0]),
-    )
-  )
+  @with_spec(arg_spec=fs_o_spec, ret_spec=fs_o_spec[0])
   def sum_output(*args):
     return tree_map(lambda *x: sum(x), *args)
 
@@ -530,25 +357,13 @@ def _compose_impl(f, *gs, **params):
   share_inputs = params.get("share_inputs", False)
   if share_inputs:
     _assert_same_input_signature(*gs)
-  f_sig = signature(f)
-  gs_parameters = tuple(parameters(g) for g in gs)
+  gs_arg_spec = tuple(g.arg_spec for g in gs)
   if len(gs) == 1 or share_inputs:
-    combined_params = gs_parameters[0]
+    combined_arg_spec = gs_arg_spec[0]
   else:
-    combined_params = tuple(
-      inspect.Parameter(
-        f"args{i}",
-        kind=inspect.Parameter.POSITIONAL_ONLY,
-        annotation=Tuple[*(p.annotation for p in g_parameters)]
-      ) for i, g_parameters in enumerate(gs_parameters)
-    )
+    combined_arg_spec = gs_arg_spec
 
-  @function
-  @with_signature(
-    inspect.Signature(
-      combined_params, return_annotation=f_sig.return_annotation
-    )
-  )
+  @with_spec(combined_arg_spec, f.ret_spec)
   def fgs(*args, **kwargs):
     if len(gs) > 1 and not share_inputs:
       f_args = tuple(g(*a) for g, a in zip(gs, args))
@@ -570,9 +385,7 @@ def compose_p_abstract_eval(f, *gs, **params):
   if share_inputs:
     _assert_same_input_signature(*gs)
   if len(gs) > 1 and not share_inputs:
-    arg_dims = (
-      Arg(SpecTree.from_args(g), name=f"arg{i}") for i, g in enumerate(gs)
-    )
+    arg_dims = (Arg(g.arg_spec, name=f"arg{i}") for i, g in enumerate(gs))
   else:
     arg_dims = gs[0].shape[1:]
   return GeneralArray((f.shape[0], *arg_dims))
@@ -703,13 +516,7 @@ def _nabla_impl(f, *, argnums=0, has_aux=False):
   jac_spec = jacobian_spec(f, argnums, has_aux)
   jacfwd = jax.jacfwd(f, argnums=argnums, has_aux=has_aux)
 
-  @function
-  @with_signature(
-    inspect.Signature(
-      parameters=parameters(f),
-      return_annotation=SpecTree.to_annotation(jac_spec),
-    )
-  )
+  @with_spec(f.arg_spec, jac_spec)
   def _jac_f(*args, **kwargs):
     return jacfwd(*args, **kwargs)
 
@@ -733,16 +540,18 @@ def nabla_p_abstract_eval(
 
 
 def _nabla_transpose_rule(t, f, *, argnums=0, has_aux=False):
-  cotangent_spec = SpecTree.from_ret(t)
-  jac_spec = jacobian_spec(f, argnums, has_aux)
+  cotangent_spec = t.ret_spec
+  assert ad.is_undefined_primal(f)
+  jac_spec = jacobian_spec(f.aval, argnums, has_aux)
   if (cotangent_spec != jac_spec):
     raise ValueError(
       f"The cotangent is expected to be {jac_spec}, got {cotangent_spec}."
     )
-  o_spec = SpecTree.from_ret(f)
+  o_spec = f.aval.ret_spec
   nabla_t = nabla(t, argnums=argnums, has_aux=has_aux)
 
-  def _contract(arg: return_annotation(nabla_t), /) -> return_annotation(f):
+  @with_spec((nabla_t.ret_spec,), f.aval.ret_spec)
+  def _contract(arg, /):
     """The transpose of nabla is simply -nabla when the operand is
     a scalar->scalar function. However, here we generalized to the
     case where both input/output of the function can be a pytree of
@@ -803,13 +612,11 @@ def linearize(f, *, argnums=None):
 
 
 def _linearize_impl(f, *, argnums=None):
-  in_anns = tuple(SpecTree.to_annotation(s) for s in SpecTree.from_args(f))
-  primals_ann = Tuple[*in_anns]
-  tangents_ann = Tuple[*(in_anns[idx] for idx in argnums)]
-  ret_ann = return_annotation(f)
 
-  @function
-  def linearized_f(primals: primals_ann, tangents: tangents_ann, /) -> ret_ann:
+  @with_spec(
+    (f.arg_spec, tuple(f.arg_spec[idx] for idx in argnums)), f.ret_spec
+  )
+  def linearized_f(primals, tangents, /):
 
     def partial_f(*args):
       _primals = [p for p in primals]
@@ -829,7 +636,7 @@ linearize_p.def_impl(_linearize_impl)
 
 @linearize_p.def_abstract_eval
 def linearize_p_abstract_eval(f, *, argnums=None):
-  primals_spec = SpecTree.from_args(f)
+  primals_spec = f.arg_spec
   tangents_spec = tuple(primals_spec[i] for i in argnums)
   ret_spec = f.shape[0].spec
   return GeneralArray(
@@ -885,20 +692,11 @@ def unpack_args(f):
 
 
 def _unpack_args_impl(f):
-  i_spec = SpecTree.from_args(f)
+  i_spec = f.arg_spec
   if len(i_spec) != 1 or not isinstance(i_spec[0], Tuple):
     raise ValueError("f must take a single tuple type argument.")
 
-  @function
-  @with_signature(
-    inspect.Signature(
-      (
-        SpecTree.to_parameter(spec, name=f"arg{i}")
-        for i, spec in enumerate(i_spec[0])
-      ),
-      return_annotation=return_annotation(f)
-    )
-  )
+  @with_spec(i_spec[0], f.ret_spec)
   def _unpacked_f(*args):
     return f(args)
 
@@ -911,7 +709,7 @@ unpack_args_p.def_impl(_unpack_args_impl)
 
 @unpack_args_p.def_abstract_eval
 def unpack_args_p_abstract_eval(f):
-  spec = SpecTree.from_args(f)
+  spec = f.arg_spec
   if len(spec) != 1 or not isinstance(spec[0], tuple):
     raise ValueError(
       "f must be a function that takes only one argument of Tuple type."
@@ -954,9 +752,8 @@ def pack_args(f):
 
 def _pack_args_impl(f):
 
-  @function
-  def _packed_f(args: SpecTree.to_annotation(SpecTree.from_args(f)
-                                            )) -> return_annotation(f):
+  @with_spec((f.arg_spec,), f.ret_spec)
+  def _packed_f(args):
     return f(*args)
 
   return _packed_f
@@ -968,7 +765,7 @@ pack_args_p.def_impl(_pack_args_impl)
 
 @pack_args_p.def_abstract_eval
 def pack_args_p_abstract_eval(f):
-  spec = SpecTree.from_args(f)
+  spec = f.arg_spec
   return GeneralArray((f.shape[0], Arg(spec, name="args")))
 
 
@@ -989,9 +786,9 @@ def _unary_compose(u, f):
   Returns:
     out: `compose(u, f)`.
   """
-  ann = return_annotation(f)
 
-  def _u(x: ann) -> ann:
+  @with_spec((f.ret_spec,), f.ret_spec)
+  def _u(x):
     return tree_map(u, x)
 
   return compose(_u, f)

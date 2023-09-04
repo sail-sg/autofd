@@ -23,7 +23,7 @@ from functools import partial
 from absl.testing import absltest, parameterized
 from autofd.general_array import (
   SpecTree,
-  general_shape,
+  function,
   dummy_input,
   random_input,
 )
@@ -39,7 +39,6 @@ from autofd.operators.operators import (
   pack_args,
   unpack_args,
   linearize,
-  function,
   unary_funcs,
   _unary_compose,
 )
@@ -56,18 +55,22 @@ def _assert_tree_array_almost_equal(a, b):
 # Test the concat operator
 
 
+@function
 def concat_f(x: Float32[Array, "3 5"]) -> Float32[Array, "3"]:
   return jnp.sum(x, axis=-1)
 
 
+@function
 def concat_f1(x: Float32[Array, "3 5"]) -> Float32[Array, ""]:
   return jnp.max(x)
 
 
+@function
 def concat_f2(x: Float32[Array, "3 5"]) -> Float32[Array, "5"]:
   return x.min(axis=0)
 
 
+@function
 def concat_f3(
   x: Float32[Array, "3 5"],
 ) -> Tuple[Float32[Array, "3"], Float32[Array, ""], Float32[Array, "5"]]:
@@ -116,6 +119,7 @@ class _TestConcatSplit(absltest.TestCase):
       np.testing.assert_array_equal(o1, o2)
 
 
+@function
 def linear_transpose_f1(
   x: Float32[Array, "3 5"], /
 ) -> Tuple[Float32[Array, "3"], Float32[Array, ""], Float32[Array, "5"]]:
@@ -127,30 +131,33 @@ class _TestLinearTranspose(absltest.TestCase):
   def test_linear_transpose(self):
     t = linear_transpose(linear_transpose_f1)
 
+    @function
     def dummy_t(
       x: Tuple[Float32[Array, "3"], Float32[Array, ""], Float32[Array, "5"]], /
     ) -> Tuple[Float32[Array, "3 5"]]:
       pass
 
-    self.assertEqual(general_shape(dummy_t), general_shape(t))
+    self.assertEqual(dummy_t.shape, t.shape)
     t(*dummy_input(t))
     # self.assertTrue(isinstance(o, Tuple[Float32[Array, "3 5"]]))
 
     tt = jax.linear_transpose(linear_transpose, linear_transpose_f1)(t)[0]
-    self.assertEqual(general_shape(linear_transpose_f1), general_shape(tt))
+    self.assertEqual(linear_transpose_f1.shape, tt.shape)
     tt(*dummy_input(tt))
 
   def test_linear_transpose_fd(self):
     f1 = linear_transpose_f1
     tf1, vjp = jax.vjp(linear_transpose, f1)
     f1_prime = vjp(tf1)[0]
-    self.assertEqual(general_shape(f1_prime), general_shape(f1))
+    self.assertEqual(f1_prime.shape, f1.shape)
 
 
+@function
 def zip_f1(x: Float32[Array, "3 5"]) -> Float32[Array, "3"]:
   return jnp.sum(x, axis=-1)
 
 
+@function
 def zip_f2(x: Float32[Array, "3 5"]) -> Float32[Array, "5"]:
   return jnp.sum(x, axis=0)
 
@@ -160,23 +167,27 @@ class _TestZipFunction(absltest.TestCase):
   def test_zip_functions(self):
     a = zip_functions(zip_f1)
 
+    @function
     def dummy(x: Float32[Array, "3 5"], /) -> Tuple[Float32[Array, "3"]]:
       pass
 
-    self.assertEqual(general_shape(a), general_shape(dummy))
+    self.assertEqual(a.shape, dummy.shape)
 
 
 # Test the compose operator
 
 
+@function
 def compose_g1(x: Float32[Array, "3 5"]) -> Float32[Array, "3"]:
   return jnp.sum(x, axis=-1)
 
 
+@function
 def compose_g2(x: Float32[Array, "3 5"]) -> Float32[Array, ""]:
   return jnp.max(x)
 
 
+@function
 def compose_f1(
   x: Float32[Array, "3"],
   y: Float32[Array, ""],
@@ -184,6 +195,7 @@ def compose_f1(
   return jnp.min(x) + y
 
 
+@function
 def compose_g3(
   x: Float32[Array, "3 5"],
   y: Float32[Array, "3 5"],
@@ -191,6 +203,7 @@ def compose_g3(
   return jnp.sum(x, axis=-1) + jnp.max(y, axis=-1)
 
 
+@function
 def compose_g4(
   x: Float32[Array, "3 5"],
   y: Float32[Array, "3 5"],
@@ -198,6 +211,7 @@ def compose_g4(
   return (jnp.sum(x, axis=-1), jnp.max(y))
 
 
+@function
 def compose_f2(
   x: Tuple[Float32[Array, "3"], Float32[Array, ""]],
   y: Float32[Array, ""],
@@ -240,16 +254,19 @@ class _TestCompose(absltest.TestCase):
   def test_compose_jvp_type(self):
     g2, g4, f2 = (compose_g2, compose_g4, compose_f2)
     primal_out, tangent_out = jax.jvp(compose, (f2, g4, g2), (f2, g4, g2))
-    self.assertEqual(general_shape(tangent_out), general_shape(primal_out))
+    self.assertEqual(tangent_out.shape, primal_out.shape)
 
   def test_compose_vjp(self):
 
+    @function
     def f(x: Float32[Array, ""]) -> Float32[Array, ""]:
       return x * 2
 
+    @function
     def g(x: Float32[Array, ""]) -> Float32[Array, ""]:
       return x**2
 
+    @function
     def o(x: Float32[Array, ""]) -> Float32[Array, ""]:
       return x**2 * 2
 
@@ -266,15 +283,18 @@ class _TestCompose(absltest.TestCase):
 
   def test_euler_lagrange(self):
 
+    @function
     def multiply_f_nablaf(f: Float32[Array, ""], nablaf: Float32[Array, ""],
                           /) -> Float32[Array, ""]:
       return jnp.multiply(f, nablaf)
 
+    @function
     def sum_square_f_nablaf(
       f: Float32[Array, ""], nablaf: Float32[Array, ""], /
     ) -> Float32[Array, ""]:
       return jnp.add(f**2, nablaf**2)
 
+    @function
     def square_f(f: Float32[Array, ""], nablaf: Float32[Array, ""],
                  /) -> Float32[Array, ""]:
       return nablaf**2
@@ -300,6 +320,7 @@ class _TestCompose(absltest.TestCase):
       return func
 
     # evaluate the functional on sin function
+    @function
     def sin(x: Float32[Array, ""], /) -> Float32[Array, ""]:
       return jnp.sin(x)
 
@@ -310,6 +331,7 @@ class _TestCompose(absltest.TestCase):
 
 
 # Test add
+@function
 def add_f1(
   x: Float32[Array, "3 5"],
   y: Float32[Array, "3 5"],
@@ -317,6 +339,7 @@ def add_f1(
   return jnp.min(x, axis=-1), jnp.min(y)
 
 
+@function
 def add_f2(
   x: Float32[Array, "3 5"],
   y: Float32[Array, "3 5"],
@@ -342,20 +365,24 @@ class _TestAdd(absltest.TestCase):
 # Test the nabla operator
 
 
+@function
 def nabla_f(x: Float32[Array, "3 5"]) -> Float32[Array, "3"]:
   return jnp.sum(jnp.sin(x * 2), axis=-1)
 
 
+@function
 def nabla_f1(x: Float32[Array, "3 5"]) -> Float32[Array, ""]:
   return jnp.sum(jnp.sin(x * 2))
 
 
+@function
 def nabla_f2(
   x: Float32[Array, "3 5"]
 ) -> Tuple[Float32[Array, ""], Float32[Array, "3"]]:
   return jnp.sum(jnp.sin(x * 2)), jnp.sin(x)[:, 0]
 
 
+@function
 def nabla_f3(x: Float32[Array, ""]) -> Float32[Array, ""]:
   return jnp.sin(x)
 
@@ -380,21 +407,22 @@ class _TestNabla(parameterized.TestCase):
   def test_transpose(self, f):
     jacf = nabla(f)
     ff = jax.linear_transpose(nabla, f)(jacf)[0]
-    self.assertEqual(SpecTree.from_args(ff), SpecTree.from_args(f))
-    self.assertEqual(SpecTree.from_ret(ff), SpecTree.from_ret(f))
+    self.assertEqual(ff.arg_spec, f.arg_spec)
+    self.assertEqual(ff.ret_spec, f.ret_spec)
     args = random_input(jax.random.PRNGKey(42), ff)
     out = ff(*args)
-    self.assertEqual(SpecTree.from_value(out), SpecTree.from_ret(ff))
+    self.assertEqual(SpecTree.from_value(out), ff.ret_spec)
 
   @parameterized.parameters(*((f,) for f in nabla_fs))
   def test_functional_derivative(self, f):
     nabla_f = nabla(f)
     _, nabla_vjp = jax.vjp(nabla, f)
     g = nabla_vjp(nabla_f)[0]
-    self.assertEqual(SpecTree.from_args(g), SpecTree.from_args(f))
+    self.assertEqual(g.arg_spec, f.arg_spec)
 
   def test_known_functions(self):
 
+    @function
     def sin(x: Float32[Array, ""]) -> Float32[Array, ""]:
       return jnp.sin(x)
 
@@ -413,6 +441,7 @@ class _TestPackUnpack(absltest.TestCase):
 
   def test_pack_unpack(self):
 
+    @function
     def f(
       a: Float32[Array, "3 5"],
       b: Float32[Array, "3 5"],
@@ -435,6 +464,7 @@ class _TestLinearize(absltest.TestCase):
 
   def test_linearize(self):
 
+    @function
     def f(
       a: Float32[Array, "3 5"],
       b: Float32[Array, "3 5"],
@@ -460,6 +490,7 @@ class _TestLinearize(absltest.TestCase):
     np.testing.assert_array_equal(out2, expect2)
 
 
+@function
 def overload_f1(
   a: Float32[Array, "3 5"],
   b: Float32[Array, "3 5"],
@@ -467,6 +498,7 @@ def overload_f1(
   return a**2 + jnp.sin(b)
 
 
+@function
 def overload_f2(
   a: Float32[Array, "3 5"],
   b: Float32[Array, "3 5"],
@@ -474,6 +506,7 @@ def overload_f2(
   return (a**2, jnp.sin(b))
 
 
+@function
 def overload_f3(
   a: Float32[Array, "3 5"],
   b: Float32[Array, "3 5"],
@@ -485,7 +518,7 @@ def overload_f4(a, b):
   return a**2 + jnp.sin(b)
 
 
-class _TestOperatorOverload(parameterized.TestCase):
+class _TestOperatorOverload():
   # TODO: test whether the abstract methods works.
   # normally it should because ShapedArray has those overloaded.
 
