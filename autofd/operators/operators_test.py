@@ -19,6 +19,7 @@ from jax.tree_util import tree_map
 from jaxtyping import Float32, Array
 from typing import Tuple
 import numpy as np
+from functools import partial
 from absl.testing import absltest, parameterized
 from autofd.general_array import (
   SpecTree,
@@ -39,6 +40,8 @@ from autofd.operators.operators import (
   unpack_args,
   linearize,
   function,
+  unary_funcs,
+  _unary_compose,
 )
 
 
@@ -553,6 +556,18 @@ class _TestOperatorOverload(parameterized.TestCase):
     _assert_tree_array_almost_equal(
       (f / g)(*args), tree_map(jnp.ones_like, f(*args))
     )
+
+
+class _TestUnary(parameterized.TestCase):
+
+  @parameterized.parameters(
+    (u, f) for _, u in unary_funcs.items() for f in (overload_f1, overload_f2)
+  )
+  def test_unary_compose(self, u, f):
+    u_f = partial(_unary_compose, u)(f)
+    out0 = u_f(*random_input(jax.random.PRNGKey(0), u_f))
+    out1 = tree_map(u, f(*random_input(jax.random.PRNGKey(0), f)))
+    _assert_tree_array_equal(out0, out1)
 
 
 if __name__ == "__main__":

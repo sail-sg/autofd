@@ -979,3 +979,48 @@ def _pack_args_transpose_rule(t, unused_f):
 jax.interpreters.ad.deflinear2(pack_args_p, _pack_args_transpose_rule)
 jax.interpreters.ad.primitive_transposes[pack_args_p
                                         ] = _pack_args_transpose_rule
+
+
+def _unary_compose(u, f):
+  """Compose unary function `u` with the input function f.
+
+  Args:
+    f: the input function.
+  Returns:
+    out: `compose(u, f)`.
+  """
+  ann = return_annotation(f)
+
+  def _u(x: ann) -> ann:
+    return tree_map(u, x)
+
+  return compose(_u, f)
+
+
+unary_funcs = {
+  "exp": jnp.exp,
+  "log": jnp.log,
+  "sin": jnp.sin,
+  "cos": jnp.cos,
+  "tan": jnp.tan,
+  "arcsin": jnp.arcsin,
+  "arccos": jnp.arccos,
+  "arctan": jnp.arctan,
+  "sinh": jnp.sinh,
+  "cosh": jnp.cosh,
+  "tanh": jnp.tanh,
+  "arcsinh": jnp.arcsinh,
+  "arccosh": jnp.arccosh,
+  "arctanh": jnp.arctanh,
+  "square": jnp.square,
+  "sqrt": jnp.sqrt,
+  "abs": jnp.abs,
+  "erf": jax.lax.erf,
+  "sigmoid": jax.nn.sigmoid,
+  "relu": jax.nn.relu,
+}
+
+for u_name, u in unary_funcs.items():
+  u_compose = partial(_unary_compose, u)
+  u_compose.__doc__ = _unary_compose.__doc__.format(u_name)
+  globals()[u_name] = u_compose
