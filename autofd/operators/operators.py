@@ -22,8 +22,10 @@ import jax.numpy as jnp
 from jax.tree_util import (
   tree_map,
   tree_flatten,
+  tree_unflatten,
   tree_structure,
 )
+from jax._src.tree_util import broadcast_prefix
 from jax.interpreters import ad
 from jax._src import ad_util
 from jax import core
@@ -31,14 +33,13 @@ from jax import core
 from autofd.general_array import (
   Ret,
   Arg,
+  Spec,
   SpecTree,
   GeneralArray,
   function,
   with_spec,
   jacobian_spec,
   dummy_array,
-  return_annotation,
-  function_to_aval,
 )
 
 
@@ -821,3 +822,79 @@ for u_name, u in unary_funcs.items():
   u_compose = partial(_unary_compose, u)
   u_compose.__doc__ = _unary_compose.__doc__.format(u_name)
   globals()[u_name] = u_compose
+
+
+def broadcast_functions(*fs):
+  specs = []
+  max_num_leaves = 0
+  full_tree = None
+  arg_spec = None
+  # find the spec trees of each input
+  # and keep the largest spec tree.
+  for f in fs:
+    if isinstance(f, (types.FunctionType, function, GeneralArray)):
+      spec = f.ret_spec
+      if arg_spec is None:
+        arg_spec = f.arg_spec
+      else:
+        if f.arg_spec != arg_spec:
+          raise ValueError(
+            f"Cannot broadcast functions with different input signatures. "
+            f"Got {arg_spec} and {f.arg_spec}"
+          )
+    else:
+      spec = SpecTree.from_value(jnp.array(f))
+    specs.append(spec)
+    num_leaves = tree_structure(spec).num_leaves
+    if num_leaves > max_num_leaves:
+      max_num_leaves = num_leaves
+      full_tree = spec
+
+  if arg_spec is None:
+    raise ValueError(f"None of {fs} is a function.")
+  # now broadcast all the spec trees to the full tree
+  specs = tuple(
+    tree_unflatten(
+      tree_structure(full_tree), broadcast_prefix(spec, full_tree)
+    ) for spec in specs
+  )
+  # extract the shapes of the full tree
+  full_shapes = tree_map(
+    lambda *args: jnp.broadcast_shapes(*(a.shape for a in args)), *specs
+  )
+  # now create the spec with full tree and full shapes
+  # while keeping the dtype
+  specs = tree_map(lambda spec: Spec(full_shapes, spec.dtype), specs)
+
+  # compose this function with any of fs, they will be broadcasted to
+  # full tree and full shapes.
+  def _broadcast(value):
+    broadcast_tree = tree_unflatten(
+      tree_structure(full_shapes), broadcast_prefix(value, full_shapes)
+    )
+    return tree_map(jnp.broadcast_to, broadcast_tree, full_shapes)
+
+  # for values, we make a constant function out of the value.
+  def _make_constant_fn(value, arg_spec, ret_spec):
+
+    @with_spec(arg_spec, ret_spec)
+    def _constant(*args):
+      return value
+
+    return _constant
+
+  # now we iterate all the functions
+  # and transform each function to have the full signature.
+  ret = []
+  for f, spec in zip(fs, specs):
+    if isinstance(f, (function, GeneralArray)):
+      if f.ret_spec != spec:
+        f = compose(
+          function(_broadcast, arg_spec=(f.ret_spec,), ret_spec=spec), f
+        )
+      ret.append(f)
+    else:
+      if SpecTree.from_value(jnp.array(f)) != spec:
+        f = _broadcast(f)
+      ret.append(_make_constant_fn(f, arg_spec, spec))
+  return ret
