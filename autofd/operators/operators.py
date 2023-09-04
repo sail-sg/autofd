@@ -101,10 +101,6 @@ class function:
   def _normalize_operand(self, operand):
     """cast the operand to a function that has the same signature as self.f
     """
-
-    def _cast_to(value, spec):
-      return jnp.broadcast_to(jnp.asarray(value, spec.dtype), spec.shape)
-
     ret_spec = SpecTree.from_ret(self.f)
     if isinstance(operand, (function, types.FunctionType)):
       _assert_same_input_signature(self.f, operand)
@@ -116,11 +112,16 @@ class function:
           f"Cannot cast value with structure {tree_structure(operand)} "
           f"to a function that return structure {tree_structure(ret_spec)}"
         )
-      out = tree_map(_cast_to, operand, ret_spec)
+      out = operand
     else:
-      out = tree_map(partial(_cast_to, operand), ret_spec)
+      out = tree_map(lambda x: jnp.array(operand), ret_spec)
 
-    @with_signature(signature(self.f))
+    @with_signature(
+      inspect.Signature(
+        parameters(self.f),
+        return_annotation=SpecTree.to_annotation(SpecTree.from_value(out))
+      )
+    )
     def _constant(*args):
       return out
 
@@ -139,7 +140,7 @@ class function:
   def __add__(self, other):
     other = self._normalize_operand(other)
 
-    def add(x: self.ret_ann, y: self.ret_ann) -> self.ret_ann:
+    def add(x: self.ret_ann, y: return_annotation(other)) -> self.ret_ann:
       return tree_map(jnp.add, x, y)
 
     return compose(add, self.f, other, share_inputs=True, f_type="linear")
@@ -154,7 +155,7 @@ class function:
   def __rsub__(self, other):
     other = self._normalize_operand(other)
 
-    def sub(x: self.ret_ann, y: self.ret_ann) -> self.ret_ann:
+    def sub(x: self.ret_ann, y: return_annotation(other)) -> self.ret_ann:
       return tree_map(jnp.subtract, x, y)
 
     return compose(sub, other, self.f, share_inputs=True, f_type="linear")
@@ -162,7 +163,7 @@ class function:
   def __sub__(self, other):
     other = self._normalize_operand(other)
 
-    def sub(x: self.ret_ann, y: self.ret_ann) -> self.ret_ann:
+    def sub(x: self.ret_ann, y: return_annotation(other)) -> self.ret_ann:
       return tree_map(jnp.subtract, x, y)
 
     return compose(sub, self.f, other, share_inputs=True, f_type="linear")
@@ -173,7 +174,7 @@ class function:
   def __mul__(self, other):
     other = self._normalize_operand(other)
 
-    def mul(x: self.ret_ann, y: self.ret_ann) -> self.ret_ann:
+    def mul(x: self.ret_ann, y: return_annotation(other)) -> self.ret_ann:
       return tree_map(jnp.multiply, x, y)
 
     return compose(mul, self.f, other, share_inputs=True)
@@ -181,7 +182,7 @@ class function:
   def __rtruediv__(self, other):
     other = self._normalize_operand(other)
 
-    def div(x: self.ret_ann, y: self.ret_ann) -> self.ret_ann:
+    def div(x: self.ret_ann, y: return_annotation(other)) -> self.ret_ann:
       return tree_map(jnp.divide, x, y)
 
     return compose(div, other, self.f, share_inputs=True)
@@ -189,7 +190,7 @@ class function:
   def __truediv__(self, other):
     other = self._normalize_operand(other)
 
-    def div(x: self.ret_ann, y: self.ret_ann) -> self.ret_ann:
+    def div(x: self.ret_ann, y: return_annotation(other)) -> self.ret_ann:
       return tree_map(jnp.divide, x, y)
 
     return compose(div, self.f, other, share_inputs=True)
@@ -197,7 +198,7 @@ class function:
   def __pow__(self, exponent):
     exponent = self._normalize_operand(exponent)
 
-    def _pow(x: self.ret_ann, y: self.ret_ann) -> self.ret_ann:
+    def _pow(x: self.ret_ann, y: return_annotation(exponent)) -> self.ret_ann:
       return tree_map(lambda x, y: x**y, x, y)
 
     return compose(_pow, self.f, exponent, share_inputs=True)

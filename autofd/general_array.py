@@ -131,6 +131,8 @@ class SpecTree:
       shape = f.shape
     elif hasattr(f, "aval"):
       shape = f.aval.shape
+    else:
+      raise ValueError(f"Unknown f: {f} of type {type(f)}")
     return tuple(d.spec for d in shape[1:])
 
   @classmethod

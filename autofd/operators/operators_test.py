@@ -46,6 +46,10 @@ def _assert_tree_array_equal(a, b):
   tree_map(lambda x, y: np.testing.assert_array_equal(x, y), a, b)
 
 
+def _assert_tree_array_almost_equal(a, b):
+  tree_map(lambda x, y: np.testing.assert_array_almost_equal(x, y), a, b)
+
+
 # Test the concat operator
 
 
@@ -478,7 +482,7 @@ def overload_f4(a, b):
   return a**2 + jnp.sin(b)
 
 
-class _TestOperatorOverload(absltest.TestCase):
+class _TestOperatorOverload(parameterized.TestCase):
   # TODO: test whether the abstract methods works.
   # normally it should because ShapedArray has those overloaded.
 
@@ -492,8 +496,8 @@ class _TestOperatorOverload(absltest.TestCase):
     _assert_tree_array_equal(fp11(*args), tree_map(lambda x: x + 1, f(*args)))
     _assert_tree_array_equal(fp12(*args), tree_map(lambda x: x + 1, f(*args)))
 
-  def test_add(self):
-    f = overload_f1
+  @parameterized.parameters(overload_f1, overload_f2, overload_f3)
+  def test_add(self, f):
     g = function(f)
     f2 = g + f
     args = random_input(jax.random.PRNGKey(0), f2)
@@ -501,41 +505,54 @@ class _TestOperatorOverload(absltest.TestCase):
     fp1 = g + 1
     _assert_tree_array_equal(fp1(*args), tree_map(lambda x: x + 1, f(*args)))
 
-  def test_sub(self):
-    f = overload_f1
+  @parameterized.parameters(overload_f1, overload_f2, overload_f3)
+  def test_sub(self, f):
     g = function(f)
     f2 = g + g
     f2subf = f2 - f
     fsubf2 = f - f2
     args = random_input(jax.random.PRNGKey(0), f2subf)
     np.testing.assert_array_equal(f2subf(*args), f(*args))
-    np.testing.assert_array_equal(fsubf2(*args), -f(*args))
+    np.testing.assert_array_equal(
+      fsubf2(*args), tree_map(lambda x: -x, f(*args))
+    )
 
-  def test_neg(self):
+  @parameterized.parameters(overload_f1, overload_f2, overload_f3)
+  def test_neg(self, f):
+    g = function(f)
+    args = random_input(jax.random.PRNGKey(0), g)
+    np.testing.assert_array_equal((-g)(*args), tree_map(lambda x: -x, g(*args)))
+
+  @parameterized.parameters(overload_f1, overload_f2, overload_f3)
+  def test_pow(self, f):
     f = overload_f1
     g = function(f)
     args = random_input(jax.random.PRNGKey(0), g)
-    np.testing.assert_array_equal((-g)(*args), -g(*args))
+    np.testing.assert_array_equal(
+      (g**3)(*args), tree_map(lambda x: x**3, g(*args))
+    )
 
-  def test_pow(self):
-    f = overload_f1
+  @parameterized.parameters(overload_f1, overload_f2, overload_f3)
+  def test_mul(self, f):
     g = function(f)
     args = random_input(jax.random.PRNGKey(0), g)
-    np.testing.assert_array_almost_equal((g**3)(*args), g(*args)**3)
+    np.testing.assert_array_equal(
+      (g * f)(*args), tree_map(lambda x: x**2, f(*args))
+    )
+    np.testing.assert_array_equal(
+      (f * g)(*args), tree_map(lambda x: x**2, f(*args))
+    )
 
-  def test_mul(self):
-    f = overload_f1
+  @parameterized.parameters(overload_f1, overload_f2, overload_f3)
+  def test_div(self, f):
     g = function(f)
     args = random_input(jax.random.PRNGKey(0), g)
-    np.testing.assert_array_equal((g * f)(*args), f(*args)**2)
-    np.testing.assert_array_equal((f * g)(*args), f(*args)**2)
-
-  def test_div(self):
-    f = overload_f1
-    g = function(f)
-    args = random_input(jax.random.PRNGKey(0), g)
-    np.testing.assert_array_equal((g / f)(*args), jnp.ones_like(f(*args)))
-    np.testing.assert_array_equal((f / g)(*args), jnp.ones_like(f(*args)))
+    _assert_tree_array_almost_equal(
+      jax.jit(g / f)(*args), tree_map(jnp.ones_like, f(*args))
+    )
+    _assert_tree_array_almost_equal(
+      (f / g)(*args), tree_map(jnp.ones_like, f(*args))
+    )
 
 
 if __name__ == "__main__":
