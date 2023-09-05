@@ -968,7 +968,7 @@ def pow(x, y):
 
 
 array_operators = {
-  "neg": lambda slf: negative(slf),
+  "neg": lambda self: negative(self),  # noqa
   "add": add,
   "radd": add,
   "sub": sub,
