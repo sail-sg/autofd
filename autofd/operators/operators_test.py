@@ -32,7 +32,6 @@ from autofd.operators.operators import (
   split,
   compose,
   nabla,
-  add,
   integrate,
   zip_functions,
   linear_transpose,
@@ -41,6 +40,8 @@ from autofd.operators.operators import (
   linearize,
   unary_funcs,
   _unary_compose,
+  add,
+  sub,
 )
 
 
@@ -347,7 +348,7 @@ def add_f2(
   return jnp.sum(x, axis=-1), jnp.max(y)
 
 
-class _TestAdd(absltest.TestCase):
+class _TestBinaryFunctions(absltest.TestCase):
 
   def test_add(self):
     f1, f2 = (add_f1, add_f2)
@@ -357,8 +358,22 @@ class _TestAdd(absltest.TestCase):
       jax.random.normal(jax.random.PRNGKey(42), (3, 5)),
     )
     tree_map(
-      np.testing.assert_array_equal, f12(x, y),
-      tree_map(jnp.add, f1(x, y), f2(x, y))
+      np.testing.assert_array_equal,
+      f12(x, y),
+      tree_map(jnp.add, f1(x, y), f2(x, y)),
+    )
+
+  def test_sub(self):
+    f1, f2 = (add_f1, add_f2)
+    f12 = sub(f1, f2)
+    x, y = (
+      jax.random.normal(jax.random.PRNGKey(12), (3, 5)),
+      jax.random.normal(jax.random.PRNGKey(42), (3, 5)),
+    )
+    tree_map(
+      np.testing.assert_array_equal,
+      f12(x, y),
+      tree_map(jnp.subtract, f1(x, y), f2(x, y)),
     )
 
 
@@ -514,11 +529,7 @@ def overload_f3(
   return ((a**2).sum(0), jnp.sin(b).sum(0))
 
 
-def overload_f4(a, b):
-  return a**2 + jnp.sin(b)
-
-
-class _TestOperatorOverload():
+class _TestOperatorOverload(parameterized.TestCase):
   # TODO: test whether the abstract methods works.
   # normally it should because ShapedArray has those overloaded.
 
@@ -565,8 +576,9 @@ class _TestOperatorOverload():
     g = function(f)
     args = random_input(jax.random.PRNGKey(0), g)
     np.testing.assert_array_equal(
-      (g**3)(*args), tree_map(lambda x: x**3, g(*args))
+      jax.jit(g**3)(*args), tree_map(lambda x: x**3, g(*args))
     )
+    jax.jit(jax.grad(lambda g: g**3)(g))(*args)
 
   @parameterized.parameters(overload_f1, overload_f2, overload_f3)
   def test_mul(self, f):

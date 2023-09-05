@@ -40,6 +40,7 @@ from autofd.general_array import (
   with_spec,
   jacobian_spec,
   dummy_array,
+  dummy_output,
 )
 
 
@@ -297,35 +298,6 @@ jax.interpreters.ad.deflinear2(integrate_p, _integrate_transpose_rule)
 jax.interpreters.ad.primitive_transposes[integrate_p
                                         ] = _integrate_transpose_rule
 
-
-def add(*fs):
-  """Add functions together.
-
-  Equivalent to:
-
-  .. code-block:: python
-
-    def add(*fs):
-      def summed(*args):
-        return sum(f(*args) for f in fs)
-      return summed
-
-  Args:
-    *fs: functions to add together.
-  Returns:
-    A function that sums the outputs of the functions.
-  """
-  fs_o_spec = tuple(f.ret_spec for f in fs)
-
-  @with_spec(arg_spec=fs_o_spec, ret_spec=fs_o_spec[0])
-  def sum_output(*args):
-    return tree_map(lambda *x: sum(x), *args)
-
-  return compose(sum_output, *fs, share_inputs=True, f_type="linear")
-
-
-ad_util.jaxval_adders[types.FunctionType] = add
-ad_util.jaxval_adders[function] = add
 # compose function f with gs
 
 
@@ -797,6 +769,7 @@ def _unary_compose(u, f):
 
 
 unary_funcs = {
+  "negative": jnp.negative,
   "exp": jnp.exp,
   "log": jnp.log,
   "sin": jnp.sin,
@@ -863,22 +836,32 @@ def broadcast_functions(*fs):
   full_shapes = tree_map(
     lambda *args: jnp.broadcast_shapes(*(a.shape for a in args)), *specs
   )
+
   # now create the spec with full tree and full shapes
   # while keeping the dtype
-  specs = tree_map(lambda spec: Spec(full_shapes, spec.dtype), specs)
+  specs = tuple(
+    tree_map(lambda sp, sh: Spec(sh, sp.dtype), spec, full_shapes)
+    for spec in specs
+  )
 
   # compose this function with any of fs, they will be broadcasted to
   # full tree and full shapes.
-  def _broadcast(value):
+  def _broadcast(spec, value):
     broadcast_tree = tree_unflatten(
-      tree_structure(full_shapes), broadcast_prefix(value, full_shapes)
+      tree_structure(spec), broadcast_prefix(value, spec)
     )
-    return tree_map(jnp.broadcast_to, broadcast_tree, full_shapes)
+    return tree_map(
+      lambda v, s: jnp.broadcast_to(v, s.shape), broadcast_tree, spec
+    )
+
+  def _make_broadcast_fn(spec, f):
+    bcast = function(partial(_broadcast, spec), (f.ret_spec,), spec)
+    return compose(bcast, f)
 
   # for values, we make a constant function out of the value.
-  def _make_constant_fn(value, arg_spec, ret_spec):
+  def _make_constant_fn(spec, value):
 
-    @with_spec(arg_spec, ret_spec)
+    @with_spec(arg_spec, spec)
     def _constant(*args):
       return value
 
@@ -890,12 +873,109 @@ def broadcast_functions(*fs):
   for f, spec in zip(fs, specs):
     if isinstance(f, (function, GeneralArray)):
       if f.ret_spec != spec:
-        f = compose(
-          function(_broadcast, arg_spec=(f.ret_spec,), ret_spec=spec), f
-        )
+        f = _make_broadcast_fn(spec, f)
       ret.append(f)
     else:
       if SpecTree.from_value(jnp.array(f)) != spec:
-        f = _broadcast(f)
-      ret.append(_make_constant_fn(f, arg_spec, spec))
+        f = _broadcast(spec, f)
+      ret.append(_make_constant_fn(spec, f))
   return ret
+
+
+def sub(x, y):
+  x, y = broadcast_functions(x, y)
+  dummy = tree_map(jnp.subtract, dummy_output(x), dummy_output(y))
+
+  @with_spec((x.ret_spec, y.ret_spec), SpecTree.from_value(dummy))
+  def _sub(x, y):
+    return tree_map(lambda x, y: x - y, x, y)
+
+  return compose(_sub, x, y, share_inputs=True, f_type="linear")
+
+
+def add(*fs):
+  """Add functions together.
+
+  Equivalent to:
+
+  .. code-block:: python
+
+    def add(*fs):
+      def summed(*args):
+        return sum(f(*args) for f in fs)
+      return summed
+
+  Args:
+    *fs: functions to add together.
+  Returns:
+    A function that sums the outputs of the functions.
+  """
+  fs = broadcast_functions(*fs)
+  fs_o_spec = tuple(f.ret_spec for f in fs)
+
+  @with_spec(arg_spec=fs_o_spec, ret_spec=fs_o_spec[0])
+  def _add(*args):
+    return tree_map(lambda *x: sum(x), *args)
+
+  return compose(_add, *fs, share_inputs=True, f_type="linear")
+
+
+ad_util.jaxval_adders[types.FunctionType] = add
+ad_util.jaxval_adders[function] = add
+
+
+def div(x, y):
+  x, y = broadcast_functions(x, y)
+  dummy = tree_map(jnp.divide, dummy_output(x), dummy_output(y))
+
+  @with_spec((x.ret_spec, y.ret_spec), SpecTree.from_value(dummy))
+  def _div(x, y):
+    return tree_map(lambda x, y: x / y, x, y)
+
+  return compose(_div, x, y, share_inputs=True)
+
+
+def mul(x, y):
+  x, y = broadcast_functions(x, y)
+  dummy = tree_map(jnp.multiply, dummy_output(x), dummy_output(y))
+
+  @with_spec((x.ret_spec, y.ret_spec), SpecTree.from_value(dummy))
+  def _mul(x, y):
+    return tree_map(lambda x, y: x * y, x, y)
+
+  return compose(_mul, x, y, share_inputs=True)
+
+
+def pow(x, y):
+  x, y = broadcast_functions(x, y)
+  dummy = tree_map(jnp.power, dummy_output(x), dummy_output(y))
+
+  @with_spec((x.ret_spec, y.ret_spec), SpecTree.from_value(dummy))
+  def _pow(x, y):
+    return tree_map(lambda x, y: x**y, x, y)
+
+  return compose(_pow, x, y, share_inputs=True)
+
+
+array_operators = {
+  "neg": lambda slf: negative(slf),
+  "add": add,
+  "radd": add,
+  "sub": sub,
+  "rsub": lambda y, x: sub(x, y),
+  "truediv": div,
+  "rtruediv": lambda y, x: div(x, y),
+  "mul": mul,
+  "rmul": mul,
+  "pow": pow,
+  "rpow": lambda y, x: pow(x, y),
+}
+
+
+def define_operators(cls, operators):
+  for op_name, op in operators.items():
+    setattr(cls, f"__{op_name}__", op)
+
+
+define_operators(GeneralArray, array_operators)
+define_operators(function, array_operators)

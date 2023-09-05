@@ -342,6 +342,10 @@ def dummy_input(f):
   return dummy_array(f.arg_spec)
 
 
+def dummy_output(f):
+  return dummy_array(f.ret_spec)
+
+
 def random_input(key, f):
   return tree_map(
     lambda s: jax.random.normal(key, s.shape, dtype=s.dtype), f.arg_spec
