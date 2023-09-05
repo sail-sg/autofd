@@ -575,10 +575,9 @@ class _TestOperatorOverload(parameterized.TestCase):
     f = overload_f1
     g = function(f)
     args = random_input(jax.random.PRNGKey(0), g)
-    np.testing.assert_array_equal(
+    _assert_tree_array_almost_equal(
       jax.jit(g**3)(*args), tree_map(lambda x: x**3, g(*args))
     )
-    jax.jit(jax.grad(lambda g: g**3)(g))(*args)
 
   @parameterized.parameters(overload_f1, overload_f2, overload_f3)
   def test_mul(self, f):

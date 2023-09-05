@@ -806,7 +806,9 @@ def broadcast_functions(*fs):
   # find the spec trees of each input
   # and keep the largest spec tree.
   for f in fs:
-    if isinstance(f, (types.FunctionType, function, GeneralArray)):
+    if hasattr(f, "aval"):
+      f = f.aval
+    if isinstance(f, (function, GeneralArray)):
       spec = f.ret_spec
       if arg_spec is None:
         arg_spec = f.arg_spec
@@ -816,8 +818,10 @@ def broadcast_functions(*fs):
             f"Cannot broadcast functions with different input signatures. "
             f"Got {arg_spec} and {f.arg_spec}"
           )
+    elif isinstance(f, core.ShapedArray):
+      spec = SpecTree.from_value(f)
     else:
-      spec = SpecTree.from_value(jnp.array(f))
+      spec = SpecTree.from_value(jnp.asarray(f))
     specs.append(spec)
     num_leaves = tree_structure(spec).num_leaves
     if num_leaves > max_num_leaves:
@@ -871,14 +875,20 @@ def broadcast_functions(*fs):
   # and transform each function to have the full signature.
   ret = []
   for f, spec in zip(fs, specs):
-    if isinstance(f, (function, GeneralArray)):
-      if f.ret_spec != spec:
+    f_aval = getattr(f, "aval", f)
+    if isinstance(f_aval, (function, GeneralArray)):
+      ret_spec = f_aval.ret_spec
+      if ret_spec != spec:
         f = _make_broadcast_fn(spec, f)
       ret.append(f)
+      continue
+    elif isinstance(f_aval, core.ShapedArray):
+      pass
     else:
-      if SpecTree.from_value(jnp.array(f)) != spec:
-        f = _broadcast(spec, f)
-      ret.append(_make_constant_fn(spec, f))
+      f = jnp.asarray(f)
+    if SpecTree.from_value(f) != spec:
+      f = _broadcast(spec, f)
+    ret.append(_make_constant_fn(spec, f))
   return ret
 
 
@@ -972,10 +982,15 @@ array_operators = {
 }
 
 
-def define_operators(cls, operators):
+def _set_function_operators(cls, operators):
   for op_name, op in operators.items():
     setattr(cls, f"__{op_name}__", op)
 
 
-define_operators(GeneralArray, array_operators)
-define_operators(function, array_operators)
+def _set_general_array_operators(cls, operators):
+  for op_name, op in operators.items():
+    setattr(cls, f"_{op_name}", staticmethod(op))
+
+
+_set_function_operators(function, array_operators)
+_set_general_array_operators(GeneralArray, array_operators)
