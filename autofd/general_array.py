@@ -15,15 +15,14 @@
 import jax
 import jax.numpy as jnp
 import jaxtyping
-from jaxtyping import Array
 from jax.tree_util import (
   tree_flatten,
   tree_map,
   tree_unflatten,
   tree_structure,
 )
-from typing import Tuple
 import jax.extend.linear_util as lu
+from typing import Tuple
 import inspect
 import types
 import numpy as np
