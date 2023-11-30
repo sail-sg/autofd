@@ -14,7 +14,6 @@
 
 import jax
 from jax import core
-from graphviz import Digraph
 import itertools
 import weakref
 from functools import lru_cache, wraps
@@ -64,6 +63,7 @@ styles = {
 
 
 def _jaxpr_graph(jaxpr):
+  from graphviz import Digraph
   id_names = (f'id{id}' for id in itertools.count())
   graph = Digraph(engine='dot')
   graph.attr(size='6,10!')

@@ -128,19 +128,6 @@ class SpecTree:
       return Spec((), jnp.float32)
     return tree_map(lambda x: Spec(x.shape, x.dtype), v)
 
-  @classmethod
-  def to_annotation(cls, spec_tree):
-    if isinstance(spec_tree, tuple):
-      return Tuple[*(cls.to_annotation(s) for s in spec_tree)]
-    elif isinstance(spec_tree, Spec):
-      shape_str = " ".join(map(str, spec_tree.shape))
-      key = spec_tree.dtype.name
-      return dtype_to_jaxtyping[key][Array, shape_str]
-    else:
-      raise ValueError(
-        f"Unknown spec_tree: {spec_tree} of type {type(spec_tree)}"
-      )
-
 
 class GeneralArray(jax.core.ShapedArray):
 
@@ -430,45 +417,6 @@ def zeros_like(f):
     return tree_map(jnp.zeros, SpecTree.from_ret(f))
 
   return _zero
-
-
-def parameters(f):
-  """Generate a tuple of `inspect.Parameter` from a function or
-  the aval of a function.
-
-  Args:
-    f: A function or the aval of a function
-  Returns:
-    A tuple of `inspect.Parameter`.
-  """
-  spec_tree = SpecTree.from_args(f)
-  return tuple(
-    SpecTree.to_parameter(spec, f"arg{i}") for i, spec in enumerate(spec_tree)
-  )
-
-
-def return_annotation(f):
-  """Get the return annotation from a function or the aval of a function.
-
-  Args:
-    f: A function or the aval of a function
-  Returns:
-    The return annotation.
-  """
-  return SpecTree.to_annotation(SpecTree.from_ret(f))
-
-
-def signature(f):
-  """Extract the signature from a function or the aval of a function.
-
-  Args:
-    f: A function or the aval of a function
-  Returns:
-    A `inspect.Signature` object.
-  """
-  return inspect.Signature(
-    parameters(f), return_annotation=return_annotation(f)
-  )
 
 
 def dummy_input(f):
