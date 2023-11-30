@@ -17,4 +17,4 @@ jobs:
         python-version: 3.11
     - name: Test
       run: |
-        pip install absl-py graphviz && pip install . && python3 -m unittest discover -p "*_test.py"
+        pip install absl-py graphviz jax jaxlib && pip install . && python3 -m unittest discover -p "*_test.py"
