@@ -14,7 +14,7 @@
 """lu transformations"""
 
 import numpy as np
-import jax.linear_util as lu
+import jax.extend.linear_util as lu
 
 
 @lu.transformation
