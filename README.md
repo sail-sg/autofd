@@ -63,4 +63,15 @@ Just like we can compute the derivative of a function $f$ at a point $x$ by $\fr
 
 ## Technical Details
 
-Please see the paper []() (to be added).
+Please see the paper [http://arxiv.org/abs/2311.18727](http://arxiv.org/abs/2311.18727).
+
+``` bibtex
+@misc{lin2023automatic,
+      title={Automatic Functional Differentiation in JAX},
+      author={Min Lin},
+      year={2023},
+      eprint={2311.18727},
+      archivePrefix={arXiv},
+      primaryClass={cs.PL}
+}
+```
