@@ -699,6 +699,9 @@ def nabla(f, *, argnums=0, method=jax.jacfwd):
   Returns:
     (nabla f): the gradient function.
   """
+  assert method in (
+    jax.jacfwd, jax.jacrev
+  ), "method need to be jax.jacfwd or jax.jacrev"
   return nabla_p.bind(f, argnums=argnums, method=method)
 
 
@@ -714,8 +717,11 @@ def nabla_spec(f, *, argnums, method):
   )
   ospec = f.ret.spec
   jspec = tree_map(
-    lambda osp:
-    tree_map(lambda isp: Spec(osp.shape + isp.shape, isp.dtype), ispec), ospec
+    lambda osp: tree_map(
+      lambda isp: Spec(
+        osp.shape + isp.shape, osp.dtype if method == jax.jacfwd else isp.dtype
+      ), ispec
+    ), ospec
   )
   return (Ret(jspec), *f.arg), None
 
