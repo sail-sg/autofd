@@ -49,4 +49,4 @@ __all__ = [
   "operators",
 ]
 
-__version__ = "0.0.5"  # noqa
+__version__ = "0.0.6"  # noqa
