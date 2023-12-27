@@ -877,7 +877,7 @@ jax.interpreters.ad.primitive_transposes[linearize_p
 
 
 def constant(*, value, arg_shape):
-  return constant_p.bind(value=value)
+  return constant_p.bind(value=value, arg_shape=arg_shape)
 
 
 @operator
@@ -886,14 +886,14 @@ def constant_impl(*, value, arg_shape):
 
   @function
   @lu.wrap_init
-  def const_value():
+  def const_value(*args):
     return value
 
   return const_value
 
 
 def constant_spec(*, value, arg_shape):
-  return (ret_like(value), *arg_shape)
+  return (ret_like(value), *arg_shape), None
 
 
 def constant_grid(*, value, arg_shape):
@@ -954,6 +954,84 @@ def _partial_jvp_rule(primals, tangents, *, args, argnums):
 
 ad.primitive_jvps[partial_p] = _partial_jvp_rule
 ad.primitive_transposes[partial_p] = _partial_transpose_rule
+
+
+def braket(lfun, rfun, *, real=False):
+  """Braket operator.
+
+  Equivalent to:
+
+  .. code-block:: python
+    intergrate(numpy.conj(lfun) * rfun)
+
+  Args:
+    lfun: left function.
+    rfun: right function.
+
+  Returns:
+    A scalar that represents the integral of the product of the
+    conjugate of lfun and rfun.
+  """
+  return braket_p.bind(lfun, rfun, real=real)
+
+
+def braket_impl(lfun, rfun, *, real):
+  argnums = tuple(range(lfun.num_args))
+  if real:
+    prod = lambda l, r: jnp.real(jnp.conj(l) * r)
+  else:
+    prod = lambda l, r: jnp.conj(l) * r
+  integrand = compose(prod, lfun, rfun, share_inputs=True)
+  return integrate_impl(integrand, argnums=argnums)
+
+
+def braket_spec(lfun, rfun, *, real):
+  assert lfun.shape == rfun.shape
+  shape = lfun.ret.spec.shape
+  if real:
+    dtype = jnp.zeros((), dtype=lfun.ret.spec.dtype).astype(float).dtype
+  else:
+    dtype = lfun.ret.spec.dtype
+  return shape, dtype
+
+
+def bracket_grid(lfun, rfun, *, real):
+  return lfun.grid
+
+
+braket_p = core.Primitive("braket")
+def_operator(
+  braket_p,
+  braket_impl,
+  braket_spec,
+  bracket_grid,
+)
+
+
+def _braket_jvp_rule(primals, tangents, *, real):
+  lfun, rfun = primals
+  lfun_dot, rfun_dot = tangents
+  primals_out = braket_p.bind(lfun, rfun, real=real)
+  tangents_out = []
+  if not isinstance(lfun_dot, ad_util.Zero):
+    tangents_out.append(braket_p.bind(lfun_dot, rfun, real=real))
+  if not isinstance(rfun_dot, ad_util.Zero):
+    tangents_out.append(braket_p.bind(lfun, rfun_dot, real=real))
+  return primals_out, sum(tangents_out)
+
+
+def _braket_transpose_rule(t, lfun, rfun, *, real):
+  assert not (ad.is_undefined_primal(lfun) and ad.is_undefined_primal(rfun))
+  if ad.is_undefined_primal(lfun):
+    t = constant(value=t, arg_shape=rfun.shape[1:])
+    return (t * rfun, None)
+  elif ad.is_undefined_primal(rfun):
+    t = constant(value=t, arg_shape=lfun.shape[1:])
+    return (None, t * lfun)
+
+
+jax.interpreters.ad.primitive_jvps[braket_p] = _braket_jvp_rule
+jax.interpreters.ad.primitive_transposes[braket_p] = _braket_transpose_rule
 
 
 def invoke(f, *args):

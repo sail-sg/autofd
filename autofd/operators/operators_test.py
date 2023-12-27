@@ -26,6 +26,7 @@ from autofd.general_array import (
   function,
   dummy_input,
   random_input,
+  Grid,
 )
 import autofd.operators as o
 from autofd.operators.operators import (
@@ -903,6 +904,48 @@ class _TestPartial(absltest.TestCase):
 
     g = jax.grad(loss)(1., 2.)
     print(g)
+
+
+class _TestBraKet(absltest.TestCase):
+
+  def test_braket(self):
+
+    @function
+    def lfun(a: Float32[Array, ""]) -> Float32[Array, ""]:
+      return jnp.sin(a)
+
+    @function
+    def rfun(a: Float32[Array, ""]) -> Float32[Array, ""]:
+      return jnp.cos(a)
+
+    lfun.grid = Grid(
+      nodes=(jnp.arange(10, dtype=jnp.float32),),
+      weights=(jnp.ones(10, dtype=jnp.float32) / 10,),
+    )
+    rfun.grid = lfun.grid
+    lr1 = o.braket(lfun, rfun)
+    lr2 = (jnp.sin(jnp.arange(10)) * jnp.cos(jnp.arange(10))).mean()
+    np.testing.assert_array_almost_equal(lr1, lr2)
+
+  def test_braket_grad(self):
+
+    @function
+    def lfun(a: Float32[Array, ""]) -> Float32[Array, ""]:
+      return jnp.sin(a)
+
+    lfun.grid = Grid(
+      nodes=(jnp.arange(10, dtype=jnp.float32),),
+      weights=(jnp.ones(10, dtype=jnp.float32) / 10,),
+    )
+
+    def F(f):
+      return o.braket(f, f, real=True)
+
+    dFdf = jax.grad(F)(lfun)
+    a, = random_input(jax.random.PRNGKey(0), lfun)
+    out1 = dFdf(a)
+    out2 = 2 * jnp.sin(a)
+    np.testing.assert_array_almost_equal(out1, out2)
 
 
 if __name__ == "__main__":
