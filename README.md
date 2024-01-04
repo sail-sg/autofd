@@ -1,5 +1,7 @@
 # Automatic Functional Differentiation in JAX
 
+<img src='./autofd.svg' width='200'>
+
 **TLDR:** We implemented automatic **functional differentiation** (as in variational calculus) in JAX, one can do `g=jax.grad(F)(f)` to get the derivative of the functional `F` at function `f`, where `g` is itself a callable python function.
 
 ## Installation and Usage
