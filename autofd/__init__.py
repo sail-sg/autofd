@@ -13,23 +13,34 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .general_array import (
-  Spec,
-  SpecTree,
-  Arg,
-  Ret,
-  Grid,
-  function,
-  with_spec,
-  num_args,
-  zeros_like,
-  is_function,
-  dummy_input,
-  dummy_output,
-  random_input,
-  dummy_array,
-)  # noqa
+try:
+  import jax
+  import optax
+
+  def scale_by_learning_rate(
+    learning_rate,
+    *,
+    flip_sign: bool = True,
+  ):
+    m = -1 if flip_sign else 1
+    # avoid calling tracer
+    if callable(learning_rate
+               ) and not isinstance(learning_rate, jax.core.Tracer):
+      return optax._src.transform.scale_by_schedule(
+        lambda count: m * learning_rate(count)
+      )
+    return optax._src.transform.scale(m * learning_rate)
+
+  optax._src.alias._scale_by_learning_rate = scale_by_learning_rate
+except ImportError:
+  print("optax not install, skip patching")
+
 from . import operators  # noqa
+from .general_array import SpecTree  # noqa
+from .general_array import (
+  Arg, Grid, Ret, Spec, dummy_array, dummy_input, dummy_output, function,
+  is_function, num_args, random_input, with_spec, zeros_like
+)
 
 __all__ = [
   "Spec",
