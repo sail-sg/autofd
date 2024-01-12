@@ -16,6 +16,13 @@
 import jax
 import optax
 
+from . import operators  # noqa
+from .general_array import SpecTree  # noqa
+from .general_array import (
+  Arg, Grid, Ret, Spec, dummy_array, dummy_input, dummy_output, function,
+  is_function, num_args, random_input, with_spec, zeros_like
+)
+
 
 def scale_by_learning_rate(
   learning_rate,
@@ -32,13 +39,6 @@ def scale_by_learning_rate(
 
 
 optax._src.alias._scale_by_learning_rate = scale_by_learning_rate
-
-from . import operators  # noqa
-from .general_array import SpecTree  # noqa
-from .general_array import (
-  Arg, Grid, Ret, Spec, dummy_array, dummy_input, dummy_output, function,
-  is_function, num_args, random_input, with_spec, zeros_like
-)
 
 __all__ = [
   "Spec",
