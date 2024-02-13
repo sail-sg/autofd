@@ -1196,8 +1196,8 @@ def add(*fs):
     return fs[0]
 
 
-ad_util.jaxval_adders[types.FunctionType] = add
-ad_util.jaxval_adders[function] = add
+ad_util.raw_jaxval_adders[types.FunctionType] = add
+ad_util.raw_jaxval_adders[function] = add
 
 array_operators = {
   "neg": lambda x: numpy.negative(x),  # noqa
