@@ -28,6 +28,10 @@ import types
 import numpy as np
 from dataclasses import dataclass
 from .utils import weak_lru
+from functools import partial
+
+# Make Tracer hashable
+jax.core.Tracer.__hash__ = lambda self: id(self)
 
 # this is to trick jax to return dtype=float32 for functions
 # TODO: generalize dtype for general arrays (aka functions).
@@ -130,22 +134,18 @@ class SpecTree:
 
 class GeneralArray(jax.core.ShapedArray):
 
-  def __init__(
-    self, shape, dtype=jnp.float32, weak_type=True, named_shape=None
-  ):
+  def __init__(self, shape, dtype=jnp.float32, weak_type=True):
     # TODO: currently setting dtype to types.FunctionType will cause
     # weird error.
-    super().__init__(
-      shape, dtype=dtype, weak_type=weak_type, named_shape=named_shape
-    )
+    super().__init__(shape, dtype=dtype, weak_type=weak_type)
 
-  def update(self, shape=None, dtype=None, weak_type=None, named_shape=None):
-    sa = super().update(shape, dtype, weak_type, named_shape)
-    return GeneralArray(sa.shape, sa.dtype, sa.weak_type, sa.named_shape)
+  def update(self, shape=None, dtype=None, weak_type=None):
+    sa = super().update(shape, dtype, weak_type)
+    return GeneralArray(sa.shape, sa.dtype, sa.weak_type)
 
   def at_least_vspace(self):
     sa = super().at_least_vspace()
-    return GeneralArray(sa.shape, sa.dtype, sa.weak_type, sa.named_shape)
+    return GeneralArray(sa.shape, sa.dtype, sa.weak_type)
 
   def str_short(self, short_dtypes=True):
     ret = self.shape[0]
@@ -174,13 +174,15 @@ class GeneralArray(jax.core.ShapedArray):
   def ret(self):
     return self.shape[0]
 
+  def to_tangent_aval(self):
+    return GeneralArray(self.shape, self.dtype, self.weak_type)
+
 
 jax.core.raise_to_shaped_mappings[GeneralArray
                                  ] = lambda aval, weak_type: GeneralArray(
                                    aval.shape,
                                    dtype=aval.dtype,
                                    weak_type=weak_type,
-                                   named_shape=aval.named_shape,
                                  )
 
 
@@ -210,9 +212,17 @@ class operator:
       return self.f.call_wrapped(*args, **kwargs)
 
   def wrap(self, gen, gen_static_args, out_store):
-    return lu.WrappedFun(
-      self, ((gen, gen_static_args),), (out_store,), (), None, None
-    )
+    """Add another transform and its store."""
+    if out_store is None:
+      return lu.WrappedFun(
+        self, partial(gen, self, *gen_static_args), ((gen, gen_static_args),),
+        (out_store,), (), None, None
+      )
+    else:
+      return lu.WrappedFun(
+        self, partial(gen, self, out_store, *gen_static_args),
+        ((gen, gen_static_args),), (out_store,), (), None, None
+      )
 
   def __repr__(self):
     return f"{self.f}"
@@ -245,18 +255,23 @@ class function:
     self._arrays["grid"] = g
 
   def wrap(self, gen, gen_static_args, out_store):
-    return lu.WrappedFun(
-      self, ((gen, gen_static_args),), (out_store,), (), None, None
-    )
+    """Add another transform and its store."""
+    if out_store is None:
+      return lu.WrappedFun(
+        self, partial(gen, self, *gen_static_args), ((gen, gen_static_args),),
+        (out_store,), (), None, None
+      )
+    else:
+      return lu.WrappedFun(
+        self, partial(gen, self, out_store, *gen_static_args),
+        ((gen, gen_static_args),), (out_store,), (), None, None
+      )
 
   def __repr__(self) -> str:
     arg_str = ",".join(
       map(lambda x: "{...}" if isinstance(x, dict) else str(x), self.arg_spec)
     )
     return f"{arg_str} -> {self.ret_spec}"
-    # return str(self.f)
-    # return (f"{self.f} with signature "
-    #         f"{arg_str} -> {self.ret_spec}")
 
   def __hash__(self):
     # as long as function call cache is concerned,

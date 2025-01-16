@@ -17,21 +17,19 @@ import numpy as np
 import jax.extend.linear_util as lu
 
 
-@lu.transformation
-def permute_args(perm, *args):
+@lu.transformation2
+def permute_args(f, perm, *args):
   inv_perm = tuple(np.argsort(perm))
-  f_args = yield (args[i] for i in inv_perm), {}
-  yield f_args
+  return f(*(args[i] for i in inv_perm))
 
 
-@lu.transformation
-def return_at(i, *args):
-  f_args = yield args, {}
-  yield f_args[i]
+@lu.transformation2
+def return_at(f, i, *args):
+  return f(*args)[i]
 
 
-@lu.transformation
-def compose(gs, num_args, share_inputs, *args):
+@lu.transformation2
+def compose(f, gs, num_args, share_inputs, *args):
   i = 0
   if share_inputs:
     fargs = tuple(g(*args) for g in gs)
@@ -41,14 +39,12 @@ def compose(gs, num_args, share_inputs, *args):
       fargs.append(g(*args[i:i + na]))
       i += na
     fargs = tuple(fargs)
-  fgs_args = yield fargs, {}
-  yield fgs_args
+  return f(*fargs)
 
 
-@lu.transformation
-def broadcast_arg(shape, argnums, *args):
+@lu.transformation2
+def broadcast_arg(f, shape, argnums, *args):
   args_shape = shape[1:]
   assert len(args_shape) == len(args)
   # assert tuple(Arg(Spec(a.shape, a.dtype)) for a in args) == args_shape
-  f_args = yield (args[i] for i in argnums), {}
-  yield f_args
+  return f(*(args[i] for i in argnums))
