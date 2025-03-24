@@ -512,16 +512,11 @@ class Grid:
 # register with jax, so that when a python function is used for tracing,
 # it is converted to an abstract ShapedArray type, that has infinite dimensions.
 jax.core.pytype_aval_mappings[types.FunctionType] = function_to_aval
-jax.interpreters.xla.pytype_aval_mappings[types.FunctionType] = function_to_aval
 jax.interpreters.xla.canonicalize_dtype_handlers[types.FunctionType
                                                 ] = lambda x: x
-jax._src.api_util._shaped_abstractify_handlers[types.FunctionType
-                                              ] = function_to_aval
 jax._src.dtypes.python_scalar_dtypes[types.FunctionType] = np.dtype("float32")
 
 # register function class
 jax.core.pytype_aval_mappings[function] = function_to_aval
-jax.interpreters.xla.pytype_aval_mappings[function] = function_to_aval
 jax.interpreters.xla.canonicalize_dtype_handlers[function] = lambda x: x
-jax._src.api_util._shaped_abstractify_handlers[function] = function_to_aval
 jax._src.dtypes.python_scalar_dtypes[function] = np.dtype("float32")

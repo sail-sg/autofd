@@ -1148,6 +1148,7 @@ funcs = {
       "multiply": binary_op,
       "divide": binary_op,
       "power": binary_op,
+      "equal": binary_op,
     },
   "nn": {
     "sigmoid": unary_op,
@@ -1211,6 +1212,7 @@ array_operators = {
   "rmul": lambda y, x: numpy.multiply(x, y),
   "pow": lambda x, y: numpy.power(x, y),
   "rpow": lambda y, x: numpy.power(x, y),
+  "eq": lambda x, y: (x is y),
 }
 
 
