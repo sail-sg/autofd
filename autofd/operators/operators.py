@@ -20,14 +20,10 @@ from types import SimpleNamespace
 import jax
 import jax.extend.linear_util as lu
 import jax.numpy as jnp
-from jax.tree_util import (
-  tree_map,
-  tree_leaves,
-  tree_structure,
-)
 from jax.interpreters import ad
 from jax._src import ad_util
-from jax import core
+from jax._src import core as _core
+from jax.extend import core
 from jax._src.util import HashableFunction
 from absl import logging
 from autofd.utils import complement_argnums
@@ -80,14 +76,15 @@ def def_operator(prim, impl, spec, grid, multiple_results=False):
     shape_and_dtype = spec(*args, **kwargs)
     if multiple_results:
       return tuple(
-        GeneralArray(s) if d is None else core.ShapedArray(s, dtype=d)
+        GeneralArray(s) if d is None else _core.ShapedArray(s, dtype=d)
         for s, d in shape_and_dtype
       )
     else:
       s, d = shape_and_dtype
       return (
         GeneralArray(s)
-        if shape_and_dtype[1] is None else core.ShapedArray(s, dtype=d)
+        if shape_and_dtype[1] is None
+        else _core.ShapedArray(s, dtype=d)
       )
 
 
@@ -175,8 +172,9 @@ def _permute_args_transpose_rule(t, f, *, perm):
 
 
 jax.interpreters.ad.deflinear2(permute_args_p, _permute_args_transpose_rule)
-jax.interpreters.ad.primitive_transposes[permute_args_p
-                                        ] = _permute_args_transpose_rule
+jax.interpreters.ad.primitive_transposes[permute_args_p] = (
+  _permute_args_transpose_rule
+)
 
 # split
 
@@ -232,6 +230,7 @@ def zip_functions(*fs, share_inputs=False):
     def zip_functions(*fs):
       def zipped_fs(*args):
         return tuple(f(*args) for f in fs)
+
       return zipped_fs
 
   Args:
@@ -300,8 +299,9 @@ def _broadcast_arg_transpose_rule(t, f, target, *, argnums):
 
 
 jax.interpreters.ad.primitive_jvps[broadcast_arg_p] = _broadcast_arg_jvp_rule
-jax.interpreters.ad.primitive_transposes[broadcast_arg_p
-                                        ] = _broadcast_arg_transpose_rule
+jax.interpreters.ad.primitive_transposes[broadcast_arg_p] = (
+  _broadcast_arg_transpose_rule
+)
 
 # linear_transpose
 
@@ -330,7 +330,7 @@ def linear_transpose_impl(f, *, argnums, unpack):
     if not unpack:
       bound_args, cotangent = args[:-1], args[-1]
     else:
-      bound_args, cotangent = args[:-len(f.ret_spec)], args[-len(f.ret_spec):]
+      bound_args, cotangent = args[: -len(f.ret_spec)], args[-len(f.ret_spec) :]
     partial_f = partial_impl(f, args=bound_args, argnums=bound_argnums)
     ret = jax.linear_transpose(partial_f.f.call_wrapped, *dummy_primals)(
       cotangent
@@ -349,7 +349,9 @@ def linear_transpose_spec(f, *, argnums, unpack):
   if unpack:
     assert isinstance(f.ret.spec, tuple)
     return (
-      ret, *map(f.arg.__getitem__, c_argnums), *map(Arg, f.ret.spec)
+      ret,
+      *map(f.arg.__getitem__, c_argnums),
+      *map(Arg, f.ret.spec),
     ), None
   else:
     return (ret, *map(f.arg.__getitem__, c_argnums), f.ret), None
@@ -384,7 +386,7 @@ def _linear_transpose_transpose_rule(t, f, *, argnums, unpack):
   else:
     n = num_args(t)
     argnums_t = tuple(range(n - len(o_spec), n))
-  unpack_t = (not isinstance(argnums, int))
+  unpack_t = not isinstance(argnums, int)
   ret = linear_transpose_p.bind(
     t,
     argnums=argnums_t,
@@ -398,8 +400,9 @@ def _linear_transpose_transpose_rule(t, f, *, argnums, unpack):
 jax.interpreters.ad.deflinear2(
   linear_transpose_p, _linear_transpose_transpose_rule
 )
-jax.interpreters.ad.primitive_transposes[linear_transpose_p
-                                        ] = _linear_transpose_transpose_rule
+jax.interpreters.ad.primitive_transposes[linear_transpose_p] = (
+  _linear_transpose_transpose_rule
+)
 
 # integrate
 
@@ -435,7 +438,7 @@ def integrate_impl(f, *, argnums):
       in_axes = tuple(0 if i == argidx else None for i in range(nargs))
       vf = jax.vmap(vf, in_axes=in_axes, out_axes=0)
     idx = np.argsort(c_argnums + argnums)
-    concat_args = (args + grid.nodes)
+    concat_args = args + grid.nodes
     full_args = [concat_args[i] for i in idx]
     out = vf(*full_args)
     for w in grid.weights:
@@ -449,7 +452,7 @@ def integrate_impl(f, *, argnums):
         "that always returns 0. The gradient of this dummy integration would "
         "still work."
       )
-      return tree_map(lambda s: jnp.zeros(s.shape, s.dtype), f.ret.spec)
+      return jax.tree.map(lambda s: jnp.zeros(s.shape, s.dtype), f.ret.spec)
     else:
       raise ValueError("grids_and_weights needs to be specified.")
   else:
@@ -508,8 +511,9 @@ def _integrate_transpose_rule(t, f, *, argnums):
 
 
 jax.interpreters.ad.primitive_jvps[integrate_p] = _integrate_jvp_rule
-jax.interpreters.ad.primitive_transposes[integrate_p
-                                        ] = _integrate_transpose_rule
+jax.interpreters.ad.primitive_transposes[integrate_p] = (
+  _integrate_transpose_rule
+)
 
 # compose
 
@@ -523,9 +527,8 @@ def compose(f, *gs, share_inputs=False):
 
     def compose(f, *gs):
       def composed(*args):
-        return f(
-          *(g(*arg) for arg, g in zip(args, gs))
-        )
+        return f(*(g(*arg) for arg, g in zip(args, gs)))
+
       return composed
 
   Args:
@@ -534,7 +537,7 @@ def compose(f, *gs, share_inputs=False):
   Returns:
     A function that applies f to the outputs of gs.
   """
-  if not isinstance(f, function) and not isinstance(f, jax.core.Tracer):
+  if not isinstance(f, function) and not isinstance(f, _core.Tracer):
     if not callable(f):
       raise ValueError(f"f must be a function. Got: {f}")
     arg_spec = tuple(SpecTree.from_ret(g) for g in gs)
@@ -618,7 +621,6 @@ def _compose_jvp_rule(primals, tangents, *, share_inputs):
 
 
 def _compose_transpose_rule(cotangent, f, *gs, share_inputs):
-
   if isinstance(cotangent, ad_util.Zero):
     return (None, *(ad_util.Zero.from_value(a) for a in gs))
 
@@ -690,6 +692,7 @@ def nabla(f, *, argnums=0, method=jax.jacfwd):
     def nabla(f, argnums=0, has_aux=False):
       def nabla_f(*args):
         jax.jacfwd(f, argnums, has_aux=has_aux)(*args)
+
       return nabla_f
 
   Args:
@@ -700,7 +703,8 @@ def nabla(f, *, argnums=0, method=jax.jacfwd):
     (nabla f): the gradient function.
   """
   assert method in (
-    jax.jacfwd, jax.jacrev
+    jax.jacfwd,
+    jax.jacrev,
   ), "method need to be jax.jacfwd or jax.jacrev"
   return nabla_p.bind(f, argnums=argnums, method=method)
 
@@ -712,16 +716,20 @@ def nabla_impl(f, *, argnums, method):
 
 
 def nabla_spec(f, *, argnums, method):
-  ispec = f.arg[argnums].spec if isinstance(argnums, int) else tuple(
-    f.arg[i].spec for i in argnums
+  ispec = (
+    f.arg[argnums].spec
+    if isinstance(argnums, int)
+    else tuple(f.arg[i].spec for i in argnums)
   )
   ospec = f.ret.spec
-  jspec = tree_map(
-    lambda osp: tree_map(
+  jspec = jax.tree.map(
+    lambda osp: jax.tree.map(
       lambda isp: Spec(
         osp.shape + isp.shape, osp.dtype if method == jax.jacfwd else isp.dtype
-      ), ispec
-    ), ospec
+      ),
+      ispec,
+    ),
+    ospec,
   )
   return (Ret(jspec), *f.arg), None
 
@@ -743,7 +751,7 @@ def _nabla_transpose_rule(t, f, *, argnums, method):
   cotangent_spec = SpecTree.from_ret(t)
   assert ad.is_undefined_primal(f)
   jac_spec = jacobian_spec(f.aval, argnums)
-  if (cotangent_spec != jac_spec):
+  if cotangent_spec != jac_spec:
     raise ValueError(
       f"The cotangent is expected to be {jac_spec}, got {cotangent_spec}."
     )
@@ -759,22 +767,22 @@ def _nabla_transpose_rule(t, f, *, argnums, method):
     """
 
     # negative nabla
-    # arg = tree_map(lambda y: -y, arg)
+    # arg = jax.tree.map(lambda y: -y, arg)
 
     def neg_sum_diag(spec_prefix, xf):
-      xf = tree_leaves(xf)
+      xf = jax.tree.leaves(xf)
       ll = int(np.sqrt(len(xf)))
       out = []
       for i in range(ll):
         x = xf[i + i * ll]
-        assert x.shape[:len(spec_prefix.shape)] == spec_prefix.shape
-        l = int(np.sqrt(np.prod(x.shape[len(spec_prefix.shape):])))
+        assert x.shape[: len(spec_prefix.shape)] == spec_prefix.shape
+        l = int(np.sqrt(np.prod(x.shape[len(spec_prefix.shape) :])))
         out.append(
           jnp.trace(x.reshape(spec_prefix.shape + (l, l)), axis1=-2, axis2=-1)
         )
       return -sum(out)
 
-    out = tree_map(neg_sum_diag, o_spec, arg)
+    out = jax.tree.map(neg_sum_diag, o_spec, arg)
     return out
 
   ret = compose(_contract, nabla_t)
@@ -806,6 +814,7 @@ def linearize(f, *, argnums=0):
     def linearize(f):
       def linearized_f(primal, tangent):
         return jax.jvp(f, primal, tangent)
+
       return linearized_f
 
   Args:
@@ -828,7 +837,7 @@ def linearize_impl(f, argnums):
   @lu.wrap_init
   def linearized_f(*args):
     assert len(args) == f.num_args + len(argnums)
-    primals, tangents = args[:f.num_args], args[f.num_args:]
+    primals, tangents = args[: f.num_args], args[f.num_args :]
     bound_argnums = complement_argnums(argnums, f.num_args)
     unbound_args = tuple(map(primals.__getitem__, argnums))
     bound_args = tuple(map(primals.__getitem__, bound_argnums))
@@ -872,8 +881,9 @@ def _linearize_jvp_rule(primals, tangents, *, argnums):
 
 
 jax.interpreters.ad.primitive_jvps[linearize_p] = _linearize_jvp_rule
-jax.interpreters.ad.primitive_transposes[linearize_p
-                                        ] = _linearize_transpose_rule
+jax.interpreters.ad.primitive_transposes[linearize_p] = (
+  _linearize_transpose_rule
+)
 
 
 def constant(*, value, arg_shape):
@@ -883,7 +893,6 @@ def constant(*, value, arg_shape):
 @operator
 @lu.wrap_init
 def constant_impl(*, value, arg_shape):
-
   @function
   @lu.wrap_init
   def const_value(*args):
@@ -1051,30 +1060,35 @@ def binary_op(op, f1, f2, **params):
   elif is_function(f1) and not is_function(f2):
     if isinstance(f2, (tuple, list)):
       return compose(
-        HashableFunction(lambda x: tree_map(op, x, f2), (op, f2)),
+        HashableFunction(lambda x: jax.tree.map(op, x, f2), (op, f2)),
         f1,
       )
     else:
       return compose(
-        HashableFunction(lambda x: tree_map(lambda y: op(y, f2), x), (op, f2)),
+        HashableFunction(
+          lambda x: jax.tree.map(lambda y: op(y, f2), x), (op, f2)
+        ),
         f1,
       )
   elif is_function(f2) and not is_function(f1):
     if isinstance(f1, (tuple, list)):
       return compose(
-        HashableFunction(lambda x: tree_map(op, f1, x), (op, f1)), f2
+        HashableFunction(lambda x: jax.tree.map(op, f1, x), (op, f1)), f2
       )
     else:
       return compose(
-        HashableFunction(lambda x: tree_map(lambda y: op(f1, y), x), (op, f1)),
+        HashableFunction(
+          lambda x: jax.tree.map(lambda y: op(f1, y), x), (op, f1)
+        ),
         f2,
       )
   else:
     ret_f1, ret_f2 = SpecTree.from_ret(f1), SpecTree.from_ret(f2)
     is_pytree = lambda spec: isinstance(spec, (tuple, list))
     if (
-      is_pytree(ret_f1) and is_pytree(ret_f2) and
-      tree_structure(ret_f1) != tree_structure(ret_f2)
+      is_pytree(ret_f1)
+      and is_pytree(ret_f2)
+      and jax.tree.structure(ret_f1) != jax.tree.structure(ret_f2)
     ):
       raise ValueError(
         f"Cannot apply {op} on functions with different return structure. "
@@ -1088,7 +1102,7 @@ def binary_op(op, f1, f2, **params):
     if is_pytree(ret_f1) and not is_pytree(ret_f2):
       return compose(
         HashableFunction(
-          lambda tree, y: tree_map(lambda x: op(x, y), tree), (op,)
+          lambda tree, y: jax.tree.map(lambda x: op(x, y), tree), (op,)
         ),
         f1,
         f2,
@@ -1096,13 +1110,15 @@ def binary_op(op, f1, f2, **params):
       )
     elif is_pytree(ret_f2) and not is_pytree(ret_f1):
       return compose(
-        lambda x, tree: tree_map(lambda y: op(x, y), tree),
+        lambda x, tree: jax.tree.map(lambda y: op(x, y), tree),
         f1,
         f2,
         share_inputs=True,
       )
     else:
-      return compose(lambda x, y: tree_map(op, x, y), f1, f2, share_inputs=True)
+      return compose(
+        lambda x, y: jax.tree.map(op, x, y), f1, f2, share_inputs=True
+      )
 
 
 def unary_op(op, f, **params):
@@ -1111,45 +1127,45 @@ def unary_op(op, f, **params):
     raise ValueError(
       "This will not happen because unary op is bind to a function."
     )
-  return compose(lambda x: tree_map(op, x), f, share_inputs=True)
+  return compose(lambda x: jax.tree.map(op, x), f, share_inputs=True)
 
 
 funcs = {
-  "numpy":
-    {
-      "negative": unary_op,
-      "exp": unary_op,
-      "log": unary_op,
-      "sin": unary_op,
-      "cos": unary_op,
-      "tan": unary_op,
-      "arcsin": unary_op,
-      "arccos": unary_op,
-      "arctan": unary_op,
-      "sinh": unary_op,
-      "cosh": unary_op,
-      "tanh": unary_op,
-      "arcsinh": unary_op,
-      "arccosh": unary_op,
-      "arctanh": unary_op,
-      "square": unary_op,
-      "sqrt": unary_op,
-      "abs": unary_op,
-      "sum": unary_op,
-      "prod": unary_op,
-      "mean": unary_op,
-      "max": unary_op,
-      "min": unary_op,
-      "argmax": unary_op,
-      "argmin": unary_op,
-      "sign": unary_op,
-      "add": binary_op,
-      "subtract": binary_op,
-      "multiply": binary_op,
-      "divide": binary_op,
-      "power": binary_op,
-      "equal": binary_op,
-    },
+  "numpy": {
+    "negative": unary_op,
+    "exp": unary_op,
+    "log": unary_op,
+    "sin": unary_op,
+    "cos": unary_op,
+    "conj": unary_op,
+    "tan": unary_op,
+    "arcsin": unary_op,
+    "arccos": unary_op,
+    "arctan": unary_op,
+    "sinh": unary_op,
+    "cosh": unary_op,
+    "tanh": unary_op,
+    "arcsinh": unary_op,
+    "arccosh": unary_op,
+    "arctanh": unary_op,
+    "square": unary_op,
+    "sqrt": unary_op,
+    "abs": unary_op,
+    "sum": unary_op,
+    "prod": unary_op,
+    "mean": unary_op,
+    "max": unary_op,
+    "min": unary_op,
+    "argmax": unary_op,
+    "argmin": unary_op,
+    "sign": unary_op,
+    "add": binary_op,
+    "subtract": binary_op,
+    "multiply": binary_op,
+    "divide": binary_op,
+    "power": binary_op,
+    "equal": binary_op,
+  },
   "nn": {
     "sigmoid": unary_op,
     "relu": unary_op,
@@ -1180,6 +1196,7 @@ def add(*fs):
     def add(*fs):
       def summed(*args):
         return sum([f(*args) for f in fs])
+
       return summed
 
   Args:
@@ -1190,7 +1207,7 @@ def add(*fs):
   if len(fs) > 1:
 
     def add_values(*args):
-      return tree_map(lambda *xs: sum(xs), *args)
+      return jax.tree.map(lambda *xs: sum(xs), *args)
 
     return compose(add_values, *fs, share_inputs=True)
   elif len(fs) == 1:
@@ -1279,14 +1296,13 @@ def _set_general_array_operators(cls, operators):
 
 
 def _set_tracer_call():
-
   def call(self, *args):
     if isinstance(self.aval, GeneralArray):
       return invoke(self, *args)
     else:
       raise ValueError("Calling an array")
 
-  jax.core.Tracer.__call__ = call
+  _core.Tracer.__call__ = call
 
 
 _set_function_operators(function, array_operators)

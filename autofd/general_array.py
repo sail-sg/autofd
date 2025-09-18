@@ -12,15 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """Core functions."""
+
 import jax
 import jax.numpy as jnp
 import jaxtyping
-from jax.tree_util import (
-  tree_flatten,
-  tree_map,
-  tree_unflatten,
-  tree_structure,
-)
+from jax.extend import core
+from jax._src import core as _core
 import jax.extend.linear_util as lu
 from typing import Tuple
 import inspect
@@ -31,7 +28,7 @@ from .utils import weak_lru
 from functools import partial
 
 # Make Tracer hashable
-jax.core.Tracer.__hash__ = lambda self: id(self)
+_core.Tracer.__hash__ = lambda self: id(self)
 
 # this is to trick jax to return dtype=float32 for functions
 # TODO: generalize dtype for general arrays (aka functions).
@@ -58,7 +55,6 @@ dtype_to_jaxtyping = {
 
 
 class Spec:
-
   def __init__(self, shape, dtype):
     self.shape = shape
     self.dtype = np.dtype(dtype)
@@ -86,8 +82,7 @@ class Spec:
 
 
 class SpecTree:
-  """Utility functions for converting between Pytree[Spec] and Annotation.
-  """
+  """Utility functions for converting between Pytree[Spec] and Annotation."""
 
   @staticmethod
   def from_annotation(ann):
@@ -129,11 +124,10 @@ class SpecTree:
   def from_value(cls, v):
     if isinstance(v, float):
       return Spec((), jnp.float32)
-    return tree_map(lambda x: Spec(x.shape, x.dtype), v)
+    return jax.tree.map(lambda x: Spec(x.shape, x.dtype), v)
 
 
-class GeneralArray(jax.core.ShapedArray):
-
+class GeneralArray(_core.ShapedArray):
   def __init__(self, shape, dtype=jnp.float32, weak_type=True):
     # TODO: currently setting dtype to types.FunctionType will cause
     # weird error.
@@ -178,14 +172,6 @@ class GeneralArray(jax.core.ShapedArray):
     return GeneralArray(self.shape, self.dtype, self.weak_type)
 
 
-jax.core.raise_to_shaped_mappings[GeneralArray
-                                 ] = lambda aval, weak_type: GeneralArray(
-                                   aval.shape,
-                                   dtype=aval.dtype,
-                                   weak_type=weak_type,
-                                 )
-
-
 class operator:
   """Decorating a WrappedFun with this class makes it cached.
   After this decoration, no more wrapper can be appended to the transforms
@@ -201,12 +187,12 @@ class operator:
 
   @weak_lru(maxsize=128, typed=False)
   def call_flatten_args_cached(self, tree_def, *args):
-    args, kwargs = tree_unflatten(tree_def, args)
+    args, kwargs = jax.tree.unflatten(tree_def, args)
     return self.f.call_wrapped(*args, **kwargs)
 
   def __call__(self, *args, **kwargs):
-    flat_args, tree_def = tree_flatten((args, kwargs))
-    if all(map(lambda a: isinstance(a, jax.core.Trace), flat_args)):
+    flat_args, tree_def = jax.tree.flatten((args, kwargs))
+    if all(map(lambda a: isinstance(a, _core.Trace), flat_args)):
       return self.call_flatten_args_cached(tree_def, *flat_args)
     else:
       return self.f.call_wrapped(*args, **kwargs)
@@ -215,13 +201,23 @@ class operator:
     """Add another transform and its store."""
     if out_store is None:
       return lu.WrappedFun(
-        self, partial(gen, self, *gen_static_args), ((gen, gen_static_args),),
-        (out_store,), (), None, None
+        self,
+        partial(gen, self, *gen_static_args),
+        ((gen, gen_static_args),),
+        (out_store,),
+        (),
+        None,
+        None,
       )
     else:
       return lu.WrappedFun(
-        self, partial(gen, self, out_store, *gen_static_args),
-        ((gen, gen_static_args),), (out_store,), (), None, None
+        self,
+        partial(gen, self, out_store, *gen_static_args),
+        ((gen, gen_static_args),),
+        (out_store,),
+        (),
+        None,
+        None,
       )
 
   def __repr__(self):
@@ -232,8 +228,7 @@ class operator:
 
 
 class function:
-  """Wrapper for a function, to add some operator overloading.
-  """
+  """Wrapper for a function, to add some operator overloading."""
 
   def __init__(self, f):
     if not isinstance(f, lu.WrappedFun):
@@ -258,13 +253,23 @@ class function:
     """Add another transform and its store."""
     if out_store is None:
       return lu.WrappedFun(
-        self, partial(gen, self, *gen_static_args), ((gen, gen_static_args),),
-        (out_store,), (), None, None
+        self,
+        partial(gen, self, *gen_static_args),
+        ((gen, gen_static_args),),
+        (out_store,),
+        (),
+        None,
+        None,
       )
     else:
       return lu.WrappedFun(
-        self, partial(gen, self, out_store, *gen_static_args),
-        ((gen, gen_static_args),), (out_store,), (), None, None
+        self,
+        partial(gen, self, out_store, *gen_static_args),
+        ((gen, gen_static_args),),
+        (out_store,),
+        (),
+        None,
+        None,
       )
 
   def __repr__(self) -> str:
@@ -280,14 +285,16 @@ class function:
 
   @weak_lru(maxsize=128, typed=False)
   def call_flatten_cached(self, tree_def, *args):
-    return tree_flatten(self.f.call_wrapped(*tree_unflatten(tree_def, args)))[0]
+    return jax.tree.flatten(
+      self.f.call_wrapped(*jax.tree.unflatten(tree_def, args))
+    )[0]
 
   def _call(self, *args):
-    out_def = tree_structure(self.ret_spec)
-    flat_args, tree_def = tree_flatten(args)
+    out_def = jax.tree.structure(self.ret_spec)
+    flat_args, tree_def = jax.tree.flatten(args)
     flat_args = tuple(flat_args)
-    if all(map(lambda a: isinstance(a, jax.core.Tracer), flat_args)):
-      return tree_unflatten(
+    if all(map(lambda a: isinstance(a, _core.Tracer), flat_args)):
+      return jax.tree.unflatten(
         out_def, self.call_flatten_cached(tree_def, *flat_args)
       )
     else:
@@ -296,8 +303,8 @@ class function:
         self._jaxpr = jax.make_jaxpr(
           lambda *args: self.call_flatten_cached(tree_def, *args)
         )(*flat_args)
-        self._jaxpr_fun = jax.core.jaxpr_as_fun(self._jaxpr)
-      return tree_unflatten(out_def, self._jaxpr_fun(*flat_args))
+        self._jaxpr_fun = core.jaxpr_as_fun(self._jaxpr)
+      return jax.tree.unflatten(out_def, self._jaxpr_fun(*flat_args))
 
   @property
   def num_args(self):
@@ -321,7 +328,6 @@ class function:
 
 
 def with_spec(arg_spec=None, ret_spec=None):
-
   def decorator(f):
     ff = function(lu.wrap_init(f))
     ff.shape = (Ret(ret_spec), *map(Arg, arg_spec))
@@ -365,8 +371,8 @@ class GeneralDim:
     pass
 
   def to_shaped_array(self):
-    return tree_map(
-      lambda s: jax.core.ShapedArray(s.shape, dtype=s.dtype), self.spec
+    return jax.tree.map(
+      lambda s: _core.ShapedArray(s.shape, dtype=s.dtype), self.spec
     )
 
 
@@ -425,10 +431,9 @@ def is_function(f):
 
 
 def zeros_like(f):
-
   @with_spec(arg_spec=SpecTree.from_args(f), ret_spec=SpecTree.from_ret(f))
   def _zero(*args):
-    return tree_map(jnp.zeros, SpecTree.from_ret(f))
+    return jax.tree.map(jnp.zeros, SpecTree.from_ret(f))
 
   return _zero
 
@@ -442,14 +447,14 @@ def dummy_output(f):
 
 
 def random_input(key, f):
-  return tree_map(
+  return jax.tree.map(
     lambda s: jax.random.normal(key, s.shape, dtype=s.dtype),
-    SpecTree.from_args(f)
+    SpecTree.from_args(f),
   )
 
 
 def dummy_array(spec_tree):
-  return tree_map(
+  return jax.tree.map(
     lambda spec: jnp.zeros(spec.shape, dtype=spec.dtype),
     spec_tree,
   )
@@ -464,19 +469,20 @@ def jacobian_spec(f, argnums=0, has_aux=False):
     o_spec, aux_spec = o_spec
   else:
     aux_spec = None
-  o_flat, o_def = tree_flatten(o_spec)
+  o_flat, o_def = jax.tree.flatten(o_spec)
   if isinstance(argnums, int):
     i_spec = i_spec[argnums]
   elif isinstance(argnums, (tuple, list)):
     i_spec = tuple(i_spec[i] for i in argnums)
-  i_flat, i_def = tree_flatten(i_spec)
-  jac_spec = tree_unflatten(
+  i_flat, i_def = jax.tree.flatten(i_spec)
+  jac_spec = jax.tree.unflatten(
     o_def,
     list(
-      tree_unflatten(
+      jax.tree.unflatten(
         i_def, list(Spec(o.shape + i.shape, i.dtype) for i in i_flat)
-      ) for o in o_flat
-    )
+      )
+      for o in o_flat
+    ),
   )
   if has_aux:
     return jac_spec, aux_spec
@@ -512,11 +518,14 @@ class Grid:
 # register with jax, so that when a python function is used for tracing,
 # it is converted to an abstract ShapedArray type, that has infinite dimensions.
 jax.core.pytype_aval_mappings[types.FunctionType] = function_to_aval
-jax.interpreters.xla.canonicalize_dtype_handlers[types.FunctionType
-                                                ] = lambda x: x
-jax._src.dtypes.python_scalar_dtypes[types.FunctionType] = np.dtype("float32")
+jax.interpreters.xla.canonicalize_dtype_handlers[types.FunctionType] = (
+  lambda x: x
+)
+jax._src.dtypes.python_scalar_types_to_dtypes[types.FunctionType] = np.dtype(
+  "float32"
+)
 
 # register function class
 jax.core.pytype_aval_mappings[function] = function_to_aval
 jax.interpreters.xla.canonicalize_dtype_handlers[function] = lambda x: x
-jax._src.dtypes.python_scalar_dtypes[function] = np.dtype("float32")
+jax._src.dtypes.python_scalar_types_to_dtypes[function] = np.dtype("float32")
